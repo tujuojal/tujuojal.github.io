@@ -210,7 +210,6 @@ html, body, #app {
 
 #panel-body {
   overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
   padding: 0 16px 32px;
   flex: 1;
 }
