@@ -1,1 +1,173 @@
-/* styles.css content here */
+/* 
+ * PowSurf CSS Styling
+ */
+
+:root {
+    --primary-color: #3498db;
+    --secondary-color: #2ecc71;
+    --font-size-base: 16px;
+    --font-size-large: 18px;
+    --font-size-small: 14px;
+    --padding-base: 10px;
+    --margin-base: 10px;
+    --border-radius: 4px;
+}
+
+/* Reset and Base Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+h1, h2, h3, h4, h5, h6 {
+    font-weight: normal;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f4f4f4;
+    color: #333;
+}
+
+/* Map Styling */
+#map {
+    width: 100%;
+    height: 400px;
+}
+
+/* Topbar Styling */
+.topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: var(--primary-color);
+    padding: var(--padding-base);
+}
+
+.logo {
+    height: 50px;
+}
+
+.button {
+    background-color: var(--secondary-color);
+    color: white;
+    border: none;
+    border-radius: var(--border-radius);
+    padding: var(--padding-base);
+    cursor: pointer;
+}
+
+/* Zoom Hint */
+.zoom-hint {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    background: rgba(255, 255, 255, 0.8);
+    border-radius: var(--border-radius);
+    padding: var(--padding-base);
+}
+
+/* Loading Bar Animation */
+.loading {
+    position: relative;
+    width: 100%;
+}
+.loading::after {
+    content: '';
+    position: absolute;
+    height: 4px;
+    background: var(--secondary-color);
+    animation: loading-animation 2s linear infinite;
+}
+@keyframes loading-animation {
+    0% { width: 0; }
+    100% { width: 100%; }
+}
+
+/* Bottom Panel Styling */
+.bottom-panel {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--padding-base);
+}
+
+.drag-handle {
+    cursor: grab;
+}
+
+/* Control Rows and Labels */
+.control-row {
+    display: flex;
+    justify-content: space-between;
+    margin: var(--margin-base) 0;
+}
+
+/* Toggle Switches */
+.toggle {
+    display: flex;
+    align-items: center;
+}
+.toggle input {
+    display: none;
+}
+.toggle-label {
+    cursor: pointer;
+}
+
+/* Control Sections */
+.control-section {
+    padding: var(--padding-base);
+    background-color: white;
+    border-radius: var(--border-radius);
+}
+
+/* Dual Range Slider */
+.range-slider {
+    width: 100%;
+}
+
+/* Legend */
+.legend {
+    display: flex;
+    justify-content: space-around;
+    margin: var(--margin-base) 0;
+}
+
+/* Base Map Selector */
+.base-map-selector {
+    display: flex;
+    justify-content: space-between;
+}
+
+/* API Key Section */
+.api-key-section {
+    padding: var(--padding-base);
+    background-color: var(--primary-color);
+    border-radius: var(--border-radius);
+}
+
+/* Slope Tap Tooltip */
+.tooltip {
+    position: absolute;
+    background: gray;
+    color: white;
+    padding: var(--padding-base);
+    border-radius: var(--border-radius);
+}
+
+/* Leaflet Overrides */
+.leaflet-control-zoom {
+    background: white;
+}
+
+.leaflet-control-attribution {
+    color: black;
+}
+
+/* Media Query for Desktop Adjustments */
+@media (min-width: 768px) {
+    body {
+        font-size: var(--font-size-large);
+    }
+}
