@@ -36,8 +36,11 @@ const CACHE_MAX = 256;
 
 /* ─── App state ─────────────────────────────────────────────────────── */
 
+let _savedApiKey = '';
+try { _savedApiKey = localStorage.getItem('mml_api_key') || ''; } catch {}
+
 const state = {
-  apiKey: localStorage.getItem('mml_api_key') || '',
+  apiKey: _savedApiKey,
   slopeActive: false,
   minSlope: 15,
   maxSlope: 45,
@@ -571,7 +574,6 @@ toggleSlope.addEventListener('change', () => {
       slopeLayer.addTo(map);
     } else {
       showToast('Zoom in to level ' + MIN_SLOPE_ZOOM + '+ to see slopes');
-      slopeLayer.addTo(map); // add anyway; guard shows hint
     }
   } else {
     slopeLayer.remove();
@@ -640,17 +642,16 @@ const apiStatus    = document.getElementById('api-status');
 
 function applyApiKey(key) {
   state.apiKey = key.trim();
-  localStorage.setItem('mml_api_key', state.apiKey);
+  try { localStorage.setItem('mml_api_key', state.apiKey); } catch {}
 
   if (state.apiKey) {
     apiStatus.textContent = 'Set';
     apiStatus.className   = 'api-badge api-set';
-    // Rebuild NLS layers with new key
+    // Rebuild NLS layers with new key and switch to NLS topo
     layers['mml-topo'] = null;
     layers['mml-bg']   = null;
-    if (state.basemap === 'mml-topo' || state.basemap === 'mml-bg') {
-      setBasemap(state.basemap);
-    }
+    setBasemap('mml-topo');
+    basemapSelect.value = 'mml-topo';
     wcsCache.clear();
     if (state.slopeActive) redrawSlope();
     showToast('API key saved — NLS maps and 2 m DEM activated.');
