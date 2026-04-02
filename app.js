@@ -31,6 +31,7 @@ const MIN_SLOPE_ZOOM = 10;
 
 // Simple LRU-style tile data cache (raw RGBA arrays)
 const elevCache = new Map();
+const wcsCache  = new Map();
 const CACHE_MAX = 256;
 
 /* ─── App state ─────────────────────────────────────────────────────── */
@@ -287,8 +288,6 @@ function sampleGrid(dem, E, N) {
   );
 }
 
-const wcsCache = new Map();
-
 /* ─── Slope canvas layer ─────────────────────────────────────────────── */
 
 /**
@@ -410,10 +409,10 @@ const SlopeLayer = L.GridLayer.extend({
 
 /** Map slope angle to RGBA colour */
 function slopeColor(deg) {
-  if (deg < 25) return [76,  175,  80, 185];   // green  – beginner
-  if (deg < 30) return [255, 235,  59, 200];   // yellow – intermediate
-  if (deg < 38) return [255, 152,   0, 200];   // orange – advanced
-  return              [244,  67,  54, 210];    // red    – expert
+  if (deg < 25) return [76,  175,  80, 204];   // green  – beginner    (--slope-a 0.80)
+  if (deg < 30) return [255, 235,  59, 217];   // yellow – intermediate (--slope-b 0.85)
+  if (deg < 38) return [255, 152,   0, 217];   // orange – advanced     (--slope-c 0.85)
+  return              [244,  67,  54, 217];    // red    – expert       (--slope-d 0.85)
 }
 
 /** Metres per pixel at given zoom and tile row (accounts for latitude). */
@@ -541,6 +540,12 @@ function setPanelOpen(open) {
 }
 
 panelDrag.addEventListener('click', () => setPanelOpen(!panelOpen));
+panelDrag.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    setPanelOpen(!panelOpen);
+  }
+});
 btnPanel.addEventListener('click',  () => setPanelOpen(!panelOpen));
 
 // Touch drag on handle
