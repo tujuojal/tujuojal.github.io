@@ -1,1 +1,160 @@
-<!-- index.html content here -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0d1b2a">
+  <title>PowSurf - Snowboard Slope Finder</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- Map -->
+    <div id="map"></div>
+
+    <!-- Top bar -->
+    <header id="topbar">
+      <div id="logo">
+        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 18L12 4L21 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M7 14L12 9L17 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-opacity="0.6"/>
+        </svg>
+        <span class="logo-text">PowSurf</span>
+      </div>
+      <div id="topbar-actions">
+        <button id="btn-locate" class="icon-btn" title="My location" aria-label="Go to my location">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button id="btn-panel" class="icon-btn" title="Settings" aria-label="Open settings panel">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Zoom info hint -->
+    <div id="zoom-hint" class="hidden">Zoom in to calculate slopes</div>
+
+    <!-- Loading indicator -->
+    <div id="loading-indicator" class="hidden">
+      <div class="loading-bar"></div>
+    </div>
+
+    <!-- Bottom panel -->
+    <div id="panel" class="panel-collapsed">
+      <div id="panel-drag" role="button" tabindex="0" aria-label="Drag to expand panel">
+        <div id="panel-handle"></div>
+      </div>
+
+      <div id="panel-body">
+
+        <!-- Slope overlay toggle -->
+        <div class="control-row">
+          <div class="control-label">
+            <span class="label-text">Slope Overlay</span>
+            <span class="label-sub">Colour-coded steepness</span>
+          </div>
+          <label class="toggle" aria-label="Toggle slope overlay">
+            <input type="checkbox" id="toggle-slope">
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+
+        <!-- Slope range controls -->
+        <div id="slope-controls" class="control-section disabled">
+          <div class="section-header">
+            <span class="section-title">Slope Range</span>
+            <span id="slope-range-display" class="section-value">15° – 45°</span>
+          </div>
+          <div class="dual-range-wrap">
+            <div class="dual-range-track">
+              <div id="range-fill" class="range-fill"></div>
+            </div>
+            <input type="range" id="min-slope" class="range-input range-min"
+                   min="0" max="60" value="15" step="1" aria-label="Minimum slope angle">
+            <input type="range" id="max-slope" class="range-input range-max"
+                   min="0" max="60" value="45" step="1" aria-label="Maximum slope angle">
+          </div>
+          <div class="range-labels">
+            <span>0°</span><span>15°</span><span>30°</span><span>45°</span><span>60°</span>
+          </div>
+
+          <!-- Legend -->
+          <div class="legend">
+            <div class="legend-item">
+              <span class="legend-swatch" style="background: rgba(76,175,80,0.8)"></span>
+              <span>15 – 25° Beginner</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-swatch" style="background: rgba(255,235,59,0.8)"></span>
+              <span>25 – 30° Intermediate</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-swatch" style="background: rgba(255,152,0,0.8)"></span>
+              <span>30 – 38° Advanced</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-swatch" style="background: rgba(244,67,54,0.8)"></span>
+              <span>38° + Expert</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Base map selector -->
+        <div class="control-row">
+          <div class="control-label">
+            <span class="label-text">Base Map</span>
+          </div>
+          <select id="basemap-select" aria-label="Select base map">
+            <option value="mml-topo">NLS Topographic</option>
+            <option value="mml-bg">NLS Background</option>
+            <option value="osm">OpenStreetMap</option>
+          </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- NLS API key section -->
+        <div class="control-section" id="api-section">
+          <div class="section-header">
+            <span class="section-title">NLS Finland API Key</span>
+            <span id="api-status" class="api-badge api-none">Not set</span>
+          </div>
+          <div class="api-input-row">
+            <input type="text" id="api-key-input"
+                   placeholder="Paste your API key here"
+                   autocomplete="off" autocorrect="off" spellcheck="false"
+                   aria-label="NLS Finland API key">
+            <button id="btn-save-key" class="btn-primary" aria-label="Save API key">Save</button>
+          </div>
+          <a href="https://www.maanmittauslaitos.fi/rajapinnat/api-avaimen-ohje"
+             target="_blank" rel="noopener noreferrer" class="api-link">
+            Get a free API key from Maanmittauslaitos &rarr;
+          </a>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Tap-to-inspect slope value tooltip -->
+    <div id="slope-tip" class="hidden" role="tooltip"></div>
+
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV/XN/WPeM=" crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>
