@@ -535,6 +535,7 @@ const btnPanel  = document.getElementById('btn-panel');
 
 let dragStartY = 0;
 let panelOpen  = false;
+let didDrag    = false;
 
 function setPanelOpen(open) {
   panelOpen = open;
@@ -542,7 +543,10 @@ function setPanelOpen(open) {
   panel.classList.toggle('panel-collapsed', !open);
 }
 
-panelDrag.addEventListener('click', () => setPanelOpen(!panelOpen));
+panelDrag.addEventListener('click', () => {
+  if (didDrag) { didDrag = false; return; }
+  setPanelOpen(!panelOpen);
+});
 panelDrag.addEventListener('keydown', e => {
   if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault();
@@ -554,11 +558,15 @@ btnPanel.addEventListener('click',  () => setPanelOpen(!panelOpen));
 // Touch drag on handle
 panelDrag.addEventListener('touchstart', e => {
   dragStartY = e.touches[0].clientY;
+  didDrag = false;
 }, { passive: true });
 
 panelDrag.addEventListener('touchend', e => {
   const dy = dragStartY - e.changedTouches[0].clientY;
-  if (Math.abs(dy) > 20) setPanelOpen(dy > 0);
+  if (Math.abs(dy) > 20) {
+    didDrag = true;
+    setPanelOpen(dy > 0);
+  }
 }, { passive: true });
 
 // Slope toggle
