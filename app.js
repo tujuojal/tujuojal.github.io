@@ -29,8 +29,10 @@ const MML_MATRIX = 'WGS84_Pseudo-Mercator';
 
 // Kartverket (Norway) – free topographic tiles, no API key required
 // CC BY 4.0  ©Kartverket
-const KARTVERKET_BASE  = 'https://cache.kartverket.no/v1/wmts/1.0.0';
-const KARTVERKET_ATTRIB = '&copy; <a href="https://www.kartverket.no">Kartverket</a>';
+// opencache.statkart.no is the classic public tile proxy; uses slippy-map {x}/{y} order.
+const KARTVERKET_ATTRIB = '&copy; <a href="https://www.kartverket.no">Kartverket</a> CC BY 4.0';
+const NO_TOPO_URL = 'https://opencache.statkart.no/gatekeeper/gk/gk.open_gmaps?layers=topo4&zoom={z}&x={x}&y={y}';
+const NO_GRAY_URL = 'https://opencache.statkart.no/gatekeeper/gk/gk.open_gmaps?layers=egk&zoom={z}&x={x}&y={y}';
 
 // NLS Finland WCS – 2 m LiDAR elevation model, ETRS-TM35FIN (EPSG:3067)
 // Requires API key.  SUBSET coords are easting/northing in metres.
@@ -83,11 +85,11 @@ function mmlUrl(layer) {
 const layers = {
   'mml-topo': null,
   'mml-bg':   null,
-  'no-topo':  L.tileLayer(`${KARTVERKET_BASE}/topo/default/webmercator/{z}/{y}/{x}.png`, {
+  'no-topo':  L.tileLayer(NO_TOPO_URL, {
     maxZoom: 18,
     attribution: KARTVERKET_ATTRIB,
   }),
-  'no-gray':  L.tileLayer(`${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{y}/{x}.png`, {
+  'no-gray':  L.tileLayer(NO_GRAY_URL, {
     maxZoom: 18,
     attribution: KARTVERKET_ATTRIB,
   }),
@@ -851,10 +853,10 @@ function build3DStyle() {
     tiles       = [`${MML_BASE}/${layer}/default/${MML_MATRIX}/{z}/{y}/{x}.png?api-key=${state.apiKey}`];
     attribution = '&copy; <a href="https://www.maanmittauslaitos.fi">Maanmittauslaitos</a>';
   } else if (state.basemap === 'no-topo') {
-    tiles       = [`${KARTVERKET_BASE}/topo/default/webmercator/{z}/{y}/{x}.png`];
+    tiles       = [NO_TOPO_URL];
     attribution = KARTVERKET_ATTRIB;
   } else if (state.basemap === 'no-gray') {
-    tiles       = [`${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{y}/{x}.png`];
+    tiles       = [NO_GRAY_URL];
     attribution = KARTVERKET_ATTRIB;
   } else {
     tiles       = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
