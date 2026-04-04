@@ -35,6 +35,13 @@ const NO_TOPO_ATTRIB = '&copy; <a href="https://opentopomap.org">OpenTopoMap</a>
 const NO_GRAY_URL   = 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
 const NO_GRAY_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
 
+// Kartverket (Norway) – official Norwegian mapping authority
+// cache.kartverket.no v1 WMTS, CC BY 4.0.  Uses OSM-style {z}/{x}/{y} tile ordering.
+const KARTVERKET_BASE  = 'https://cache.kartverket.no/v1/wmts/1.0.0';
+const KARTVERKET_ATTRIB = '&copy; <a href="https://www.kartverket.no">Kartverket</a> CC BY 4.0';
+const KV_TOPO_URL = `${KARTVERKET_BASE}/topo/default/webmercator/{z}/{x}/{y}.png`;
+const KV_GRAY_URL = `${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{x}/{y}.png`;
+
 // NLS Finland WCS – 2 m LiDAR elevation model, ETRS-TM35FIN (EPSG:3067)
 // Requires API key.  SUBSET coords are easting/northing in metres.
 const MML_WCS_BASE  = 'https://avoin-karttakuva.maanmittauslaitos.fi/ortokuvat-ja-korkeusmallit/wcs/v2';
@@ -63,6 +70,7 @@ const state = {
   minSlope: 15,
   maxSlope: 45,
   basemap: 'mml-topo',
+  bearing: 0,   // map rotation, degrees clockwise from north (2D view only)
 };
 
 /* ─── Map setup ─────────────────────────────────────────────────────── */
@@ -93,6 +101,14 @@ const layers = {
   'no-gray':  L.tileLayer(NO_GRAY_URL, {
     maxZoom: 19,
     attribution: NO_GRAY_ATTRIB,
+  }),
+  'kv-topo':  L.tileLayer(KV_TOPO_URL, {
+    maxZoom: 18,
+    attribution: KARTVERKET_ATTRIB,
+  }),
+  'kv-gray':  L.tileLayer(KV_GRAY_URL, {
+    maxZoom: 18,
+    attribution: KARTVERKET_ATTRIB,
   }),
   osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
@@ -837,11 +853,52 @@ function init() {
 
 init();
 
+/* ─── 2D map rotation (bearing) ─────────────────────────────────────── */
+
+const mapEl        = document.getElementById('map');
+const btnCompass   = document.getElementById('btn-compass');
+const compassIcon  = btnCompass.querySelector('svg');
+
+function setMapBearing(deg) {
+  state.bearing = ((deg % 360) + 360) % 360;
+  mapEl.style.transform = state.bearing === 0 ? '' : `rotate(${-state.bearing}deg)`;
+  compassIcon.style.transform = `rotate(${state.bearing}deg)`;
+  btnCompass.classList.toggle('active', state.bearing !== 0);
+}
+
+btnCompass.addEventListener('click', () => setMapBearing(0));
+
+// Two-finger rotation gesture on the 2D map
+let _touchRotateStart = null;
+
+function _touchAngle(touches) {
+  const dx = touches[1].clientX - touches[0].clientX;
+  const dy = touches[1].clientY - touches[0].clientY;
+  return Math.atan2(dy, dx) * (180 / Math.PI);
+}
+
+mapEl.addEventListener('touchstart', e => {
+  if (e.touches.length === 2) {
+    _touchRotateStart = { angle: _touchAngle(e.touches), bearing: state.bearing };
+  }
+}, { passive: true });
+
+mapEl.addEventListener('touchmove', e => {
+  if (e.touches.length === 2 && _touchRotateStart) {
+    e.preventDefault();
+    const delta = _touchAngle(e.touches) - _touchRotateStart.angle;
+    setMapBearing(_touchRotateStart.bearing + delta);
+  }
+}, { passive: false });
+
+mapEl.addEventListener('touchend', () => {
+  if (_touchRotateStart) _touchRotateStart = null;
+}, { passive: true });
+
 /* ─── 3D terrain view (MapLibre GL JS) ──────────────────────────────── */
 
-const btn3d   = document.getElementById('btn-3d');
-const mapEl   = document.getElementById('map');
 const map3dEl = document.getElementById('map-3d');
+const btn3d   = document.getElementById('btn-3d');
 
 let map3d      = null;
 let terrain3d  = false;   // true once terrain source is loaded
@@ -853,10 +910,10 @@ function build3DStyle() {
     const layer = state.basemap === 'mml-topo' ? 'maastokartta' : 'taustakartta';
     tiles       = [`${MML_BASE}/${layer}/default/${MML_MATRIX}/{z}/{y}/{x}.png?api-key=${state.apiKey}`];
     attribution = '&copy; <a href="https://www.maanmittauslaitos.fi">Maanmittauslaitos</a>';
-  } else if (state.basemap === 'no-topo') {
+  } else if (state.basemap === 'no-topo' || state.basemap === 'kv-topo') {
     tiles       = [NO_TOPO_URL];
     attribution = NO_TOPO_ATTRIB;
-  } else if (state.basemap === 'no-gray') {
+  } else if (state.basemap === 'no-gray' || state.basemap === 'kv-gray') {
     tiles       = [NO_GRAY_URL];
     attribution = NO_GRAY_ATTRIB;
   } else {

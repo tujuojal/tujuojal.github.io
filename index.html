@@ -37,6 +37,16 @@
             <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
         </button>
+        <button id="btn-compass" class="icon-btn" title="Reset north (tap) · Two-finger rotate on map" aria-label="Reset map to north">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.2s ease">
+            <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.2" opacity="0.4"/>
+            <!-- north needle – accent colour -->
+            <path d="M12 4 L10.5 12 L12 10.5 L13.5 12 Z" fill="var(--accent)"/>
+            <!-- south needle – muted -->
+            <path d="M12 20 L10.5 12 L12 13.5 L13.5 12 Z" fill="currentColor" opacity="0.35"/>
+            <circle cx="12" cy="12" r="1.5" fill="currentColor" opacity="0.7"/>
+          </svg>
+        </button>
         <button id="btn-3d" class="icon-btn" title="3D view" aria-label="Toggle 3D terrain view">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
@@ -132,8 +142,10 @@
           <select id="basemap-select" aria-label="Select base map">
             <option value="mml-topo">Finland – NLS Topographic</option>
             <option value="mml-bg">Finland – NLS Background</option>
-            <option value="no-topo">Scandinavia – Topographic</option>
+            <option value="no-topo">Scandinavia – OpenTopoMap</option>
             <option value="no-gray">Scandinavia – Grayscale</option>
+            <option value="kv-topo">Norway – Kartverket Topo</option>
+            <option value="kv-gray">Norway – Kartverket Gray</option>
             <option value="osm">OpenStreetMap</option>
           </select>
         </div>

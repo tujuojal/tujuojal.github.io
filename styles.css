@@ -55,6 +55,12 @@ html, body {
   z-index: 0;
 }
 
+/* 2D rotation – transform applied by JS; origin stays at viewport centre */
+#map {
+  transform-origin: center center;
+  transition: transform 0.15s ease;
+}
+
 /* Remove Leaflet's default focus outline on map tiles */
 .leaflet-container:focus { outline: none; }
 
