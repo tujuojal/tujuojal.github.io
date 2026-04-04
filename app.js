@@ -820,3 +820,90 @@ function init() {
 }
 
 init();
+
+/* ─── 3D terrain view (MapLibre GL JS) ──────────────────────────────── */
+
+const btn3d   = document.getElementById('btn-3d');
+const mapEl   = document.getElementById('map');
+const map3dEl = document.getElementById('map-3d');
+
+let map3d      = null;
+let terrain3d  = false;   // true once terrain source is loaded
+
+/** Build a MapLibre style using the current basemap selection. */
+function build3DStyle() {
+  // Use NLS tiles if key is set, otherwise OSM
+  const tiles = state.apiKey
+    ? [`${MML_BASE}/maastokartta/default/${MML_MATRIX}/{z}/{y}/{x}.png?api-key=${state.apiKey}`]
+    : ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
+  const attribution = state.apiKey
+    ? '&copy; <a href="https://www.maanmittauslaitos.fi">Maanmittauslaitos</a>'
+    : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+  return {
+    version: 8,
+    sources: {
+      basemap: { type: 'raster', tiles, tileSize: 256, attribution },
+      'terrain-dem': {
+        type: 'raster-dem',
+        tiles: [TERRARIUM_URL],
+        tileSize: 256,
+        encoding: 'terrarium',
+        maxzoom: 14,
+      },
+    },
+    layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+  };
+}
+
+function init3D() {
+  if (map3d) return;
+
+  const center = map.getCenter();
+
+  map3d = new maplibregl.Map({
+    container: 'map-3d',
+    style: build3DStyle(),
+    center: [center.lng, center.lat],
+    zoom:   map.getZoom(),
+    pitch:  50,
+    bearing: 0,
+    maxPitch: 85,
+  });
+
+  map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-left');
+  map3d.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+
+  // Enable terrain elevation once the style has loaded
+  map3d.on('load', () => {
+    map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
+    terrain3d = true;
+  });
+}
+
+btn3d.addEventListener('click', () => {
+  const entering3D = mapEl.classList.contains('hidden') === false;
+
+  if (entering3D) {
+    // Switch 2D → 3D
+    init3D();
+    const c = map.getCenter();
+    map3d.setCenter([c.lng, c.lat]);
+    map3d.setZoom(map.getZoom());
+    mapEl.classList.add('hidden');
+    map3dEl.classList.remove('hidden');
+    btn3d.classList.add('active');
+    btn3d.setAttribute('aria-pressed', 'true');
+    if (state.slopeActive) showToast('Slope overlay is not shown in 3D view');
+  } else {
+    // Switch 3D → 2D; sync position back to Leaflet
+    if (map3d) {
+      const c = map3d.getCenter();
+      map.setView([c.lat, c.lng], map3d.getZoom());
+    }
+    map3dEl.classList.add('hidden');
+    mapEl.classList.remove('hidden');
+    btn3d.classList.remove('active');
+    btn3d.setAttribute('aria-pressed', 'false');
+  }
+});

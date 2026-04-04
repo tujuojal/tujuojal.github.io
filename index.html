@@ -9,6 +9,7 @@
   <meta name="theme-color" content="#0d1b2a">
   <title>PowSurf - Snowboard Slope Finder</title>
   <link rel="stylesheet" href="leaflet.css">
+  <link rel="stylesheet" href="maplibre-gl.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 18L12 4L21 18' stroke='%234fc3f7' stroke-width='2' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
 </head>
@@ -17,6 +18,8 @@
 
     <!-- Map -->
     <div id="map"></div>
+    <!-- 3D terrain view (MapLibre GL JS) -->
+    <div id="map-3d" class="hidden"></div>
 
     <!-- Top bar -->
     <header id="topbar">
@@ -32,6 +35,13 @@
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
             <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button id="btn-3d" class="icon-btn" title="3D view" aria-label="Toggle 3D terrain view">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M2 12l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
           </svg>
         </button>
         <button id="btn-panel" class="icon-btn" title="Settings" aria-label="Open settings panel">
@@ -156,6 +166,7 @@
   </div>
 
   <script src="leaflet.js"></script>
+  <script src="maplibre-gl.js"></script>
   <script src="app.js"></script>
   <noscript>
     <p style="padding:2rem;color:#f0f4f8;background:#0d1b2a;font-family:sans-serif">
