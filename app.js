@@ -11,6 +11,16 @@
 
 'use strict';
 
+/* ─── Leaflet availability guard ─────────────────────────────────────── */
+if (typeof L === 'undefined') {
+  const el = document.getElementById('map');
+  if (el) {
+    el.style.cssText = 'display:flex;align-items:center;justify-content:center;background:#0d1b2a';
+    el.innerHTML = '<p style="color:#f0f4f8;font-family:sans-serif;text-align:center;padding:2rem">Failed to load map library.<br>Check your internet connection and reload.</p>';
+  }
+  throw new Error('Leaflet (L) is not defined — script loading failed');
+}
+
 /* ─── Constants ─────────────────────────────────────────────────────── */
 
 // Correct NLS Finland hostname (avoin-karttakuva, not avoin-karttakuvapalvelu)
