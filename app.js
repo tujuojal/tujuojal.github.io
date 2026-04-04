@@ -27,6 +27,11 @@ if (typeof L === 'undefined') {
 const MML_BASE   = 'https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0';
 const MML_MATRIX = 'WGS84_Pseudo-Mercator';
 
+// Kartverket (Norway) – free topographic tiles, no API key required
+// CC BY 4.0  ©Kartverket
+const KARTVERKET_BASE  = 'https://cache.kartverket.no/v1/wmts/1.0.0';
+const KARTVERKET_ATTRIB = '&copy; <a href="https://www.kartverket.no">Kartverket</a>';
+
 // NLS Finland WCS – 2 m LiDAR elevation model, ETRS-TM35FIN (EPSG:3067)
 // Requires API key.  SUBSET coords are easting/northing in metres.
 const MML_WCS_BASE  = 'https://avoin-karttakuva.maanmittauslaitos.fi/ortokuvat-ja-korkeusmallit/wcs/v2';
@@ -60,8 +65,8 @@ const state = {
 /* ─── Map setup ─────────────────────────────────────────────────────── */
 
 const map = L.map('map', {
-  center: [65.0, 26.0],   // Centre of Finland
-  zoom: 6,
+  center: [64.5, 16.0],   // Centre of Scandinavia (covers Finland & Norway)
+  zoom: 5,
   zoomControl: true,
   attributionControl: true,
 });
@@ -78,6 +83,14 @@ function mmlUrl(layer) {
 const layers = {
   'mml-topo': null,
   'mml-bg':   null,
+  'no-topo':  L.tileLayer(`${KARTVERKET_BASE}/topo/default/webmercator/{z}/{y}/{x}.png`, {
+    maxZoom: 18,
+    attribution: KARTVERKET_ATTRIB,
+  }),
+  'no-gray':  L.tileLayer(`${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{y}/{x}.png`, {
+    maxZoom: 18,
+    attribution: KARTVERKET_ATTRIB,
+  }),
   osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -811,8 +824,8 @@ function init() {
     apiStatus.className   = 'api-badge api-set';
   }
 
-  // Load base map (prefer NLS topo if key exists, else OSM)
-  const initialBasemap = state.apiKey ? 'mml-topo' : 'osm';
+  // Load base map (prefer NLS topo if key exists, else Norway topo as a good free default)
+  const initialBasemap = state.apiKey ? 'mml-topo' : 'no-topo';
   basemapSelect.value = initialBasemap;
   setBasemap(initialBasemap);
 
@@ -832,13 +845,21 @@ let terrain3d  = false;   // true once terrain source is loaded
 
 /** Build a MapLibre style using the current basemap selection. */
 function build3DStyle() {
-  // Use NLS tiles if key is set, otherwise OSM
-  const tiles = state.apiKey
-    ? [`${MML_BASE}/maastokartta/default/${MML_MATRIX}/{z}/{y}/{x}.png?api-key=${state.apiKey}`]
-    : ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
-  const attribution = state.apiKey
-    ? '&copy; <a href="https://www.maanmittauslaitos.fi">Maanmittauslaitos</a>'
-    : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  let tiles, attribution;
+  if ((state.basemap === 'mml-topo' || state.basemap === 'mml-bg') && state.apiKey) {
+    const layer = state.basemap === 'mml-topo' ? 'maastokartta' : 'taustakartta';
+    tiles       = [`${MML_BASE}/${layer}/default/${MML_MATRIX}/{z}/{y}/{x}.png?api-key=${state.apiKey}`];
+    attribution = '&copy; <a href="https://www.maanmittauslaitos.fi">Maanmittauslaitos</a>';
+  } else if (state.basemap === 'no-topo') {
+    tiles       = [`${KARTVERKET_BASE}/topo/default/webmercator/{z}/{y}/{x}.png`];
+    attribution = KARTVERKET_ATTRIB;
+  } else if (state.basemap === 'no-gray') {
+    tiles       = [`${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{y}/{x}.png`];
+    attribution = KARTVERKET_ATTRIB;
+  } else {
+    tiles       = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
+    attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  }
 
   return {
     version: 8,
