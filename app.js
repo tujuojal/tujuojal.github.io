@@ -27,12 +27,13 @@ if (typeof L === 'undefined') {
 const MML_BASE   = 'https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0';
 const MML_MATRIX = 'WGS84_Pseudo-Mercator';
 
-// Kartverket (Norway) – free topographic tiles, no API key required
-// CC BY 4.0  ©Kartverket
-// opencache.statkart.no is the classic public tile proxy; uses slippy-map {x}/{y} order.
-const KARTVERKET_ATTRIB = '&copy; <a href="https://www.kartverket.no">Kartverket</a> CC BY 4.0';
-const NO_TOPO_URL = 'https://opencache.statkart.no/gatekeeper/gk/gk.open_gmaps?layers=topo4&zoom={z}&x={x}&y={y}';
-const NO_GRAY_URL = 'https://opencache.statkart.no/gatekeeper/gk/gk.open_gmaps?layers=egk&zoom={z}&x={x}&y={y}';
+// Norway / Scandinavia topographic tiles – free, CORS-enabled
+// OpenTopoMap: OSM data + SRTM contours, CC-BY-SA
+const NO_TOPO_URL   = 'https://tile.opentopomap.org/{z}/{x}/{y}.png';
+const NO_TOPO_ATTRIB = '&copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA) | &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+// CartoDB Positron: clean grayscale, CORS-enabled
+const NO_GRAY_URL   = 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
+const NO_GRAY_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
 
 // NLS Finland WCS – 2 m LiDAR elevation model, ETRS-TM35FIN (EPSG:3067)
 // Requires API key.  SUBSET coords are easting/northing in metres.
@@ -86,12 +87,12 @@ const layers = {
   'mml-topo': null,
   'mml-bg':   null,
   'no-topo':  L.tileLayer(NO_TOPO_URL, {
-    maxZoom: 18,
-    attribution: KARTVERKET_ATTRIB,
+    maxZoom: 17,
+    attribution: NO_TOPO_ATTRIB,
   }),
   'no-gray':  L.tileLayer(NO_GRAY_URL, {
-    maxZoom: 18,
-    attribution: KARTVERKET_ATTRIB,
+    maxZoom: 19,
+    attribution: NO_GRAY_ATTRIB,
   }),
   osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
@@ -854,10 +855,10 @@ function build3DStyle() {
     attribution = '&copy; <a href="https://www.maanmittauslaitos.fi">Maanmittauslaitos</a>';
   } else if (state.basemap === 'no-topo') {
     tiles       = [NO_TOPO_URL];
-    attribution = KARTVERKET_ATTRIB;
+    attribution = NO_TOPO_ATTRIB;
   } else if (state.basemap === 'no-gray') {
     tiles       = [NO_GRAY_URL];
-    attribution = KARTVERKET_ATTRIB;
+    attribution = NO_GRAY_ATTRIB;
   } else {
     tiles       = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
     attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
