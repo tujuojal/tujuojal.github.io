@@ -998,18 +998,22 @@ btn3d.addEventListener('click', () => {
 
   if (entering3D) {
     // Switch 2D → 3D
-    // Show container BEFORE init so MapLibre measures the correct canvas size,
-    // then call resize() to handle repeat visits where map3d already exists.
+    // Capture position before hiding the 2D map
     const c = map.getCenter();
+    const z = map.getZoom();
     mapEl.classList.add('hidden');
     map3dEl.classList.remove('hidden');
-    init3D();                           // first visit: initialises with visible container
-    map3d.setCenter([c.lng, c.lat]);
-    map3d.setZoom(map.getZoom());
-    map3d.resize();                     // repeat visits: re-measure container size
     btn3d.classList.add('active');
     btn3d.setAttribute('aria-pressed', 'true');
     if (state.slopeActive) showToast('Slope overlay is not shown in 3D view');
+    // Defer init/resize by one frame so the browser computes the container's
+    // layout (clientWidth/clientHeight) before MapLibre reads it.
+    requestAnimationFrame(() => {
+      init3D();                        // first visit: MapLibre now sees correct size
+      map3d.setCenter([c.lng, c.lat]);
+      map3d.setZoom(z);
+      map3d.resize();                  // repeat visits: re-measure container
+    });
   } else {
     // Switch 3D → 2D; sync position back to Leaflet
     if (map3d) {
