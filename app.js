@@ -874,7 +874,9 @@ function setMapBearing(deg) {
 btnCompass.addEventListener('click', () => setMapBearing(0));
 
 // Two-finger rotation gesture on the 2D map
-let _touchRotateStart = null;
+// Leaflet handles pinch-zoom normally; we layer rotation on top.
+// Per-frame incremental tracking avoids drift and allows sensitivity tuning.
+let _prevTouchAngle = null;
 
 function _touchAngle(touches) {
   const dx = touches[1].clientX - touches[0].clientX;
@@ -883,27 +885,24 @@ function _touchAngle(touches) {
 }
 
 mapEl.addEventListener('touchstart', e => {
-  if (e.touches.length === 2) {
-    // Take over the gesture from Leaflet's pinch-zoom handler
-    map.touchZoom.disable();
-    _touchRotateStart = { angle: _touchAngle(e.touches), bearing: state.bearing };
-  }
+  _prevTouchAngle = e.touches.length === 2 ? _touchAngle(e.touches) : null;
 }, { passive: true });
 
 mapEl.addEventListener('touchmove', e => {
-  if (e.touches.length === 2 && _touchRotateStart) {
-    e.preventDefault();
-    const delta = _touchAngle(e.touches) - _touchRotateStart.angle;
-    setMapBearing(_touchRotateStart.bearing + delta);
-  }
-}, { passive: false });
+  if (e.touches.length !== 2 || _prevTouchAngle === null) return;
+  const angle = _touchAngle(e.touches);
+  // Normalise delta to [-180, 180] to handle atan2 wrap-around
+  let delta = angle - _prevTouchAngle;
+  if (delta >  180) delta -= 360;
+  if (delta < -180) delta += 360;
+  _prevTouchAngle = angle;
+  // Dead-zone: ignore tiny per-frame deltas caused by imprecise zooming.
+  // Scale sensitivity to 0.55 so a deliberate rotation isn't overly fast.
+  if (Math.abs(delta) > 1.5) setMapBearing(state.bearing + delta * 0.55);
+}, { passive: true });
 
-function _endRotateGesture() {
-  map.touchZoom.enable();
-  _touchRotateStart = null;
-}
-mapEl.addEventListener('touchend',   e => { if (e.touches.length < 2) _endRotateGesture(); }, { passive: true });
-mapEl.addEventListener('touchcancel', _endRotateGesture, { passive: true });
+mapEl.addEventListener('touchend',    e => { if (e.touches.length < 2) _prevTouchAngle = null; }, { passive: true });
+mapEl.addEventListener('touchcancel', () => { _prevTouchAngle = null; }, { passive: true });
 
 /* ─── 3D terrain view (MapLibre GL JS) ──────────────────────────────── */
 
