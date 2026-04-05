@@ -39,8 +39,8 @@ const NO_GRAY_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright"
 // cache.kartverket.no v1 WMTS, CC BY 4.0.  Uses OSM-style {z}/{x}/{y} tile ordering.
 const KARTVERKET_BASE  = 'https://cache.kartverket.no/v1/wmts/1.0.0';
 const KARTVERKET_ATTRIB = '&copy; <a href="https://www.kartverket.no">Kartverket</a> CC BY 4.0';
-const KV_TOPO_URL = `${KARTVERKET_BASE}/topo/default/webmercator/{z}/{x}/{y}.png`;
-const KV_GRAY_URL = `${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{x}/{y}.png`;
+const KV_TOPO_URL = `${KARTVERKET_BASE}/topo/default/webmercator/{z}/{y}/{x}.png`;
+const KV_GRAY_URL = `${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{y}/{x}.png`;
 
 // NLS Finland WCS – 2 m LiDAR elevation model, ETRS-TM35FIN (EPSG:3067)
 // Requires API key.  SUBSET coords are easting/northing in metres.
@@ -879,6 +879,8 @@ function _touchAngle(touches) {
 
 mapEl.addEventListener('touchstart', e => {
   if (e.touches.length === 2) {
+    // Disable Leaflet's pinch-zoom so we can take over the gesture for rotation
+    map.touchZoom.disable();
     _touchRotateStart = { angle: _touchAngle(e.touches), bearing: state.bearing };
   }
 }, { passive: true });
@@ -891,8 +893,11 @@ mapEl.addEventListener('touchmove', e => {
   }
 }, { passive: false });
 
-mapEl.addEventListener('touchend', () => {
-  if (_touchRotateStart) _touchRotateStart = null;
+mapEl.addEventListener('touchend', e => {
+  if (e.touches.length < 2) {
+    map.touchZoom.enable();
+    _touchRotateStart = null;
+  }
 }, { passive: true });
 
 /* ─── 3D terrain view (MapLibre GL JS) ──────────────────────────────── */
