@@ -51,12 +51,25 @@ html, body {
 /* ─── Map ───────────────────────────────────────────────────────────── */
 #map, #map-3d {
   position: absolute;
-  inset: 0;
   z-index: 0;
 }
 
-/* 2D rotation – transform applied by JS; origin stays at viewport centre */
+/* 3D view fills the screen normally */
+#map-3d {
+  inset: 0;
+}
+
+/*
+ * 2D map is oversized (150 % each axis > √2 × 100 %) and centred so that
+ * a CSS rotation never leaves empty corners visible through #app's overflow:hidden.
+ * The bearing transform is applied by JS as translate(-50%,-50%) rotate(Xdeg).
+ */
 #map {
+  width: 150%;
+  height: 150%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   transform-origin: center center;
   transition: transform 0.15s ease;
 }
