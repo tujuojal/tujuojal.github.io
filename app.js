@@ -81,12 +81,9 @@ const state = {
 const map = L.map('map', {
   center: [64.5, 16.0],   // Centre of Scandinavia (covers Finland & Norway)
   zoom: 5,
-  zoomControl: true,
+  zoomControl: false,     // zoom +/- off: control would be in oversized div corner (off-screen)
   attributionControl: true,
 });
-
-// Move zoom control away from bottom-right (panel area on mobile)
-map.zoomControl.setPosition('bottomleft');
 
 /* ─── Tile layers ────────────────────────────────────────────────────── */
 
@@ -866,7 +863,8 @@ const compassIcon  = btnCompass.querySelector('svg');
 
 function setMapBearing(deg) {
   state.bearing = ((deg % 360) + 360) % 360;
-  mapEl.style.transform = state.bearing === 0 ? '' : `rotate(${state.bearing}deg)`;
+  // Always keep translate(-50%,-50%) to maintain the oversized centred layout
+  mapEl.style.transform = `translate(-50%, -50%) rotate(${state.bearing}deg)`;
   compassIcon.style.transform = `rotate(${state.bearing}deg)`;
   btnCompass.classList.toggle('active', state.bearing !== 0);
 }
@@ -1000,12 +998,15 @@ btn3d.addEventListener('click', () => {
 
   if (entering3D) {
     // Switch 2D → 3D
-    init3D();
+    // Show container BEFORE init so MapLibre measures the correct canvas size,
+    // then call resize() to handle repeat visits where map3d already exists.
     const c = map.getCenter();
-    map3d.setCenter([c.lng, c.lat]);
-    map3d.setZoom(map.getZoom());
     mapEl.classList.add('hidden');
     map3dEl.classList.remove('hidden');
+    init3D();                           // first visit: initialises with visible container
+    map3d.setCenter([c.lng, c.lat]);
+    map3d.setZoom(map.getZoom());
+    map3d.resize();                     // repeat visits: re-measure container size
     btn3d.classList.add('active');
     btn3d.setAttribute('aria-pressed', 'true');
     if (state.slopeActive) showToast('Slope overlay is not shown in 3D view');
