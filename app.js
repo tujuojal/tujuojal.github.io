@@ -866,7 +866,7 @@ const compassIcon  = btnCompass.querySelector('svg');
 
 function setMapBearing(deg) {
   state.bearing = ((deg % 360) + 360) % 360;
-  mapEl.style.transform = state.bearing === 0 ? '' : `rotate(${-state.bearing}deg)`;
+  mapEl.style.transform = state.bearing === 0 ? '' : `rotate(${state.bearing}deg)`;
   compassIcon.style.transform = `rotate(${state.bearing}deg)`;
   btnCompass.classList.toggle('active', state.bearing !== 0);
 }
@@ -893,9 +893,8 @@ mapEl.addEventListener('touchstart', e => {
 mapEl.addEventListener('touchmove', e => {
   if (e.touches.length === 2 && _touchRotateStart) {
     e.preventDefault();
-    // Negate delta: clockwise finger sweep → clockwise map rotation (bearing decreases)
     const delta = _touchAngle(e.touches) - _touchRotateStart.angle;
-    setMapBearing(_touchRotateStart.bearing - delta);
+    setMapBearing(_touchRotateStart.bearing + delta);
   }
 }, { passive: false });
 
