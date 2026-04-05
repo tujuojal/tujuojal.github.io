@@ -36,9 +36,12 @@ const NO_GRAY_URL   = 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png
 const NO_GRAY_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
 
 // Kartverket (Norway) – official Norwegian mapping authority
-// cache.kartverket.no v1 WMTS, CC BY 4.0.  Uses OSM-style {z}/{x}/{y} tile ordering.
-const KARTVERKET_BASE  = 'https://cache.kartverket.no/v1/wmts/1.0.0';
+// cache.kartverket.no v1 WMTS, CC BY 4.0.
+// Path uses WMTS TileRow/TileCol order: {z}/{y}/{x}.
+// Subdomains cache.kartverket.no, cache2.kartverket.no, cache3.kartverket.no.
+const KARTVERKET_BASE  = 'https://cache{s}.kartverket.no/v1/wmts/1.0.0';
 const KARTVERKET_ATTRIB = '&copy; <a href="https://www.kartverket.no">Kartverket</a> CC BY 4.0';
+const KV_SUBDOMAINS = ['', '2', '3'];
 const KV_TOPO_URL = `${KARTVERKET_BASE}/topo/default/webmercator/{z}/{y}/{x}.png`;
 const KV_GRAY_URL = `${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{y}/{x}.png`;
 
@@ -103,10 +106,12 @@ const layers = {
     attribution: NO_GRAY_ATTRIB,
   }),
   'kv-topo':  L.tileLayer(KV_TOPO_URL, {
+    subdomains: KV_SUBDOMAINS,
     maxZoom: 18,
     attribution: KARTVERKET_ATTRIB,
   }),
   'kv-gray':  L.tileLayer(KV_GRAY_URL, {
+    subdomains: KV_SUBDOMAINS,
     maxZoom: 18,
     attribution: KARTVERKET_ATTRIB,
   }),
@@ -879,7 +884,7 @@ function _touchAngle(touches) {
 
 mapEl.addEventListener('touchstart', e => {
   if (e.touches.length === 2) {
-    // Disable Leaflet's pinch-zoom so we can take over the gesture for rotation
+    // Take over the gesture from Leaflet's pinch-zoom handler
     map.touchZoom.disable();
     _touchRotateStart = { angle: _touchAngle(e.touches), bearing: state.bearing };
   }
@@ -888,17 +893,18 @@ mapEl.addEventListener('touchstart', e => {
 mapEl.addEventListener('touchmove', e => {
   if (e.touches.length === 2 && _touchRotateStart) {
     e.preventDefault();
+    // Negate delta: clockwise finger sweep → clockwise map rotation (bearing decreases)
     const delta = _touchAngle(e.touches) - _touchRotateStart.angle;
-    setMapBearing(_touchRotateStart.bearing + delta);
+    setMapBearing(_touchRotateStart.bearing - delta);
   }
 }, { passive: false });
 
-mapEl.addEventListener('touchend', e => {
-  if (e.touches.length < 2) {
-    map.touchZoom.enable();
-    _touchRotateStart = null;
-  }
-}, { passive: true });
+function _endRotateGesture() {
+  map.touchZoom.enable();
+  _touchRotateStart = null;
+}
+mapEl.addEventListener('touchend',   e => { if (e.touches.length < 2) _endRotateGesture(); }, { passive: true });
+mapEl.addEventListener('touchcancel', _endRotateGesture, { passive: true });
 
 /* ─── 3D terrain view (MapLibre GL JS) ──────────────────────────────── */
 
