@@ -874,9 +874,10 @@ function setMapBearing(deg) {
 btnCompass.addEventListener('click', () => setMapBearing(0));
 
 // Two-finger rotation gesture on the 2D map
-// Leaflet handles pinch-zoom normally; we layer rotation on top.
-// Per-frame incremental tracking avoids drift and allows sensitivity tuning.
-let _prevTouchAngle = null;
+// Uses gesture-recognition: stay in "undecided" mode (Leaflet zoom works normally)
+// until cumulative angle change exceeds ROTATION_ACTIVATE, then commit to rotation.
+let _touchGesture = null; // { startAngle, prevAngle, mode: 'undecided'|'rotating' }
+const ROTATION_ACTIVATE = 12; // degrees of cumulative angle change before rotation locks in
 
 function _touchAngle(touches) {
   const dx = touches[1].clientX - touches[0].clientX;
@@ -884,25 +885,48 @@ function _touchAngle(touches) {
   return Math.atan2(dy, dx) * (180 / Math.PI);
 }
 
+function _normDeg(d) {
+  if (d >  180) d -= 360;
+  if (d < -180) d += 360;
+  return d;
+}
+
 mapEl.addEventListener('touchstart', e => {
-  _prevTouchAngle = e.touches.length === 2 ? _touchAngle(e.touches) : null;
+  if (e.touches.length === 2) {
+    const a = _touchAngle(e.touches);
+    _touchGesture = { startAngle: a, prevAngle: a, mode: 'undecided' };
+  } else {
+    _endTouchGesture();
+  }
 }, { passive: true });
 
 mapEl.addEventListener('touchmove', e => {
-  if (e.touches.length !== 2 || _prevTouchAngle === null) return;
+  if (e.touches.length !== 2 || !_touchGesture) return;
   const angle = _touchAngle(e.touches);
-  // Normalise delta to [-180, 180] to handle atan2 wrap-around
-  let delta = angle - _prevTouchAngle;
-  if (delta >  180) delta -= 360;
-  if (delta < -180) delta += 360;
-  _prevTouchAngle = angle;
-  // Dead-zone: ignore tiny per-frame deltas caused by imprecise zooming.
-  // Scale sensitivity to 0.55 so a deliberate rotation isn't overly fast.
-  if (Math.abs(delta) > 1.5) setMapBearing(state.bearing + delta * 0.55);
+  const g = _touchGesture;
+
+  if (g.mode === 'undecided') {
+    // Wait until cumulative rotation clearly exceeds threshold before committing
+    if (Math.abs(_normDeg(angle - g.startAngle)) >= ROTATION_ACTIVATE) {
+      g.mode = 'rotating';
+      g.prevAngle = angle;    // reset incremental base so there's no snap
+      map.touchZoom.disable(); // hand off gesture from Leaflet to us
+    }
+    return; // Leaflet handles zoom while undecided
+  }
+
+  // Rotation mode: incremental update each frame
+  const delta = _normDeg(angle - g.prevAngle);
+  g.prevAngle = angle;
+  setMapBearing(state.bearing + delta * 0.75);
 }, { passive: true });
 
-mapEl.addEventListener('touchend',    e => { if (e.touches.length < 2) _prevTouchAngle = null; }, { passive: true });
-mapEl.addEventListener('touchcancel', () => { _prevTouchAngle = null; }, { passive: true });
+function _endTouchGesture() {
+  if (_touchGesture?.mode === 'rotating') map.touchZoom.enable();
+  _touchGesture = null;
+}
+mapEl.addEventListener('touchend',    e => { if (e.touches.length < 2) _endTouchGesture(); }, { passive: true });
+mapEl.addEventListener('touchcancel', _endTouchGesture, { passive: true });
 
 /* ─── 3D terrain view (MapLibre GL JS) ──────────────────────────────── */
 
