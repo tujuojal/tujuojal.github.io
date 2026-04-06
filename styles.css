@@ -623,3 +623,9 @@ input[type="text"]::placeholder {
     margin-bottom: 80px !important;
   }
 }
+
+/* ─── Location marker ────────────────────────────────────────────────── */
+.pows-loc-marker {
+  background: none !important;
+  border: none !important;
+}
