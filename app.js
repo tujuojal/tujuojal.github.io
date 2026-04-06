@@ -716,25 +716,135 @@ function applyApiKey(key) {
 btnSaveKey.addEventListener('click', () => applyApiKey(apiKeyInput.value));
 apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyApiKey(apiKeyInput.value); });
 
-// Geolocation
+// Geolocation + device heading
 const btnLocate = document.getElementById('btn-locate');
 
+/* SVG location marker: blue dot + directional arrow pointing at `heading` degrees.
+   heading=null → arrow hidden (heading unknown).
+   The SVG lives inside the rotated #map so the arrow automatically
+   points to the correct geographic direction regardless of map bearing. */
+function locationIcon(heading) {
+  const arrow = heading !== null
+    ? `<g transform="rotate(${heading})">
+         <path d="M0,-18 L-8,-36 L0,-44 L8,-36 Z"
+               fill="rgba(79,195,247,0.92)" stroke="white" stroke-width="1.5"
+               stroke-linejoin="round"/>
+       </g>`
+    : '';
+  return L.divIcon({
+    className: '',
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="-40 -40 80 80">
+      ${arrow}
+      <circle r="10" fill="#4fc3f7" stroke="white" stroke-width="3"
+              filter="drop-shadow(0 0 5px rgba(79,195,247,0.7))"/>
+    </svg>`,
+    iconSize:   [80, 80],
+    iconAnchor: [40, 40],
+  });
+}
+
+let _locMarker    = null;   // L.marker for the dot + arrow
+let _locAccuracy  = null;   // L.circle for accuracy ring
+let _watchId      = null;   // geolocation watchPosition id
+let _orientHdlr   = null;   // deviceorientation handler ref
+let _deviceHead   = null;   // current compass heading (degrees, or null)
+let _trackingOn   = false;
+let _firstFix     = true;
+
+function _updateLocMarker(latlng, accuracy) {
+  if (!_locMarker) {
+    _locAccuracy = L.circle(latlng, {
+      radius: accuracy, color: '#4fc3f7', fillColor: '#4fc3f7',
+      fillOpacity: 0.12, weight: 1, interactive: false,
+    }).addTo(map);
+    _locMarker = L.marker(latlng, {
+      icon: locationIcon(_deviceHead), zIndexOffset: 1000, interactive: false,
+    }).addTo(map);
+  } else {
+    _locMarker.setLatLng(latlng).setIcon(locationIcon(_deviceHead));
+    _locAccuracy.setLatLng(latlng).setRadius(accuracy);
+  }
+}
+
+function _startOrientTracking() {
+  if (_orientHdlr) return;
+
+  _orientHdlr = e => {
+    let h = null;
+    if (typeof e.webkitCompassHeading === 'number' && e.webkitCompassHeading >= 0) {
+      h = e.webkitCompassHeading;               // iOS (already CW from North)
+    } else if (typeof e.alpha === 'number' && e.alpha !== null) {
+      h = (360 - e.alpha) % 360;               // Android: alpha is CCW, flip it
+    }
+    if (h !== null) {
+      _deviceHead = h;
+      if (_locMarker) _locMarker.setIcon(locationIcon(_deviceHead));
+    }
+  };
+
+  const attach = () => {
+    // Prefer absolute events (correct compass on Chrome/Android)
+    window.addEventListener('deviceorientationabsolute', _orientHdlr);
+    // Fallback for iOS which only fires 'deviceorientation' (with webkitCompassHeading)
+    window.addEventListener('deviceorientation', _orientHdlr);
+  };
+
+  if (typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // iOS 13+ requires a user-gesture permission prompt
+    DeviceOrientationEvent.requestPermission()
+      .then(s => { if (s === 'granted') attach(); })
+      .catch(() => {});
+  } else {
+    attach();
+  }
+}
+
+function _stopOrientTracking() {
+  if (!_orientHdlr) return;
+  window.removeEventListener('deviceorientationabsolute', _orientHdlr);
+  window.removeEventListener('deviceorientation', _orientHdlr);
+  _orientHdlr  = null;
+  _deviceHead  = null;
+}
+
+function _stopTracking() {
+  if (_watchId !== null) { navigator.geolocation.clearWatch(_watchId); _watchId = null; }
+  _stopOrientTracking();
+  if (_locMarker)   { map.removeLayer(_locMarker);   _locMarker   = null; }
+  if (_locAccuracy) { map.removeLayer(_locAccuracy); _locAccuracy = null; }
+  _trackingOn = false;
+  _firstFix   = true;
+  btnLocate.classList.remove('active');
+  btnLocate.style.opacity = '';
+}
+
 btnLocate.addEventListener('click', () => {
+  if (_trackingOn) { _stopTracking(); return; }
+
   if (!navigator.geolocation) {
     showToast('Geolocation not supported by this browser');
     return;
   }
-  btnLocate.style.opacity = '0.5';
-  navigator.geolocation.getCurrentPosition(
+
+  _trackingOn = true;
+  _firstFix   = true;
+  btnLocate.classList.add('active');
+  btnLocate.style.opacity = '0.6';
+
+  _watchId = navigator.geolocation.watchPosition(
     pos => {
       btnLocate.style.opacity = '';
-      map.setView([pos.coords.latitude, pos.coords.longitude], Math.max(map.getZoom(), 13));
+      const latlng = [pos.coords.latitude, pos.coords.longitude];
+      if (_firstFix) { _firstFix = false; map.setView(latlng, Math.max(map.getZoom(), 13)); }
+      _updateLocMarker(latlng, pos.coords.accuracy);
+      _startOrientTracking();
     },
     err => {
-      btnLocate.style.opacity = '';
       showToast('Could not get location: ' + err.message);
+      _stopTracking();
     },
-    { enableHighAccuracy: true, timeout: 10000 },
+    { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 },
   );
 });
 
