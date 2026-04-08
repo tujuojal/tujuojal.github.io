@@ -721,22 +721,23 @@ const btnLocate = document.getElementById('btn-locate');
 
 /* SVG location marker: blue dot + directional arrow pointing at `heading` degrees.
    heading=null → arrow hidden (heading unknown).
-   The SVG lives inside the rotated #map so the arrow automatically
-   points to the correct geographic direction regardless of map bearing. */
+   Uses two concentric circles instead of a CSS filter for maximum cross-browser
+   compatibility (filter="..." on SVG attributes is non-standard and broken in
+   some privacy-focused browsers). */
 function locationIcon(heading) {
   const arrow = heading !== null
     ? `<g transform="rotate(${heading})">
          <path d="M0,-18 L-8,-36 L0,-44 L8,-36 Z"
-               fill="rgba(79,195,247,0.92)" stroke="white" stroke-width="1.5"
-               stroke-linejoin="round"/>
+               fill="#4fc3f7" fill-opacity="0.95"
+               stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
        </g>`
     : '';
   return L.divIcon({
-    className: '',
+    className: 'pows-loc-marker',   // keeps Leaflet default display:block
     html: `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="-40 -40 80 80">
       ${arrow}
-      <circle r="10" fill="#4fc3f7" stroke="white" stroke-width="3"
-              filter="drop-shadow(0 0 5px rgba(79,195,247,0.7))"/>
+      <circle r="18" fill="#4fc3f7" fill-opacity="0.2"/>
+      <circle r="9"  fill="#4fc3f7" stroke="white" stroke-width="3"/>
     </svg>`,
     iconSize:   [80, 80],
     iconAnchor: [40, 40],
