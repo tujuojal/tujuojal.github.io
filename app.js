@@ -726,7 +726,7 @@ const btnLocate = document.getElementById('btn-locate');
    some privacy-focused browsers). */
 function locationIcon(heading) {
   const arrow = heading !== null
-    ? `<g transform="rotate(${heading})">
+    ? `<g transform="rotate(${((heading - state.bearing) % 360 + 360) % 360})">
          <path d="M0,-18 L-8,-36 L0,-44 L8,-36 Z"
                fill="#4fc3f7" fill-opacity="0.95"
                stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
@@ -751,6 +751,7 @@ let _orientHdlr   = null;   // deviceorientation handler ref
 let _deviceHead   = null;   // current compass heading (degrees, or null)
 let _trackingOn   = false;
 let _firstFix     = true;
+let _lastIconAngle = null;   // throttle icon rebuilds; reset on tracking stop
 
 function _updateLocMarker(latlng, accuracy) {
   if (!_locMarker) {
@@ -779,7 +780,17 @@ function _startOrientTracking() {
     }
     if (h !== null) {
       _deviceHead = h;
-      if (_locMarker) _locMarker.setIcon(locationIcon(_deviceHead));
+      setMapBearing(h);   // auto-rotate map so device heading faces up
+      if (_locMarker) {
+        // Arrow angle after map rotation = heading - bearing = 0 (always up).
+        // Only rebuild the icon when this angle changes noticeably (first fix or
+        // manual bearing override). This avoids 10+ DOM rebuilds per second.
+        const ang = ((h - state.bearing) % 360 + 360) % 360;
+        if (_lastIconAngle === null || Math.abs(ang - _lastIconAngle) >= 2) {
+          _lastIconAngle = ang;
+          _locMarker.setIcon(locationIcon(h));
+        }
+      }
     }
   };
 
@@ -814,8 +825,9 @@ function _stopTracking() {
   _stopOrientTracking();
   if (_locMarker)   { map.removeLayer(_locMarker);   _locMarker   = null; }
   if (_locAccuracy) { map.removeLayer(_locAccuracy); _locAccuracy = null; }
-  _trackingOn = false;
-  _firstFix   = true;
+  _trackingOn    = false;
+  _firstFix      = true;
+  _lastIconAngle = null;
   btnLocate.classList.remove('active');
   btnLocate.style.opacity = '';
 }
@@ -828,8 +840,9 @@ btnLocate.addEventListener('click', () => {
     return;
   }
 
-  _trackingOn = true;
-  _firstFix   = true;
+  _trackingOn    = true;
+  _firstFix      = true;
+  _lastIconAngle = null;
   btnLocate.classList.add('active');
   btnLocate.style.opacity = '0.6';
 
