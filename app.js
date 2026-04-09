@@ -69,11 +69,14 @@ try { _savedApiKey = localStorage.getItem('mml_api_key') || ''; } catch {}
 
 const state = {
   apiKey: _savedApiKey,
-  slopeActive: false,
-  minSlope: 15,
-  maxSlope: 45,
-  basemap: 'mml-topo',
-  bearing: 0,   // map rotation, degrees clockwise from north (2D view only)
+  slopeActive:  false,
+  minSlope:     15,
+  maxSlope:     45,
+  basemap:      'mml-topo',
+  bearing:      0,       // map rotation, degrees clockwise from north (2D view only)
+  shadowActive: false,
+  shadowDate:   new Date(),
+  shadowSun:    { azimuth: 180, altitude: 45 }, // updated by updateShadow()
 };
 
 /* ─── Map setup ─────────────────────────────────────────────────────── */
@@ -469,6 +472,109 @@ function metersPerPixel(z, coords) {
   return (40075016.686 * Math.cos(lat * Math.PI / 180)) / (256 * Math.pow(2, z));
 }
 
+/* ─── Sun position ───────────────────────────────────────────────────── */
+
+/**
+ * Compute solar azimuth and altitude for a given moment and location.
+ * Uses simplified NOAA / Spencer equations; accuracy ~0.5° for 2000–2050.
+ *
+ * @param {Date}   date   – any Date (UTC is extracted internally)
+ * @param {number} latDeg – latitude  +N (degrees)
+ * @param {number} lngDeg – longitude +E (degrees)
+ * @returns {{ azimuth: number, altitude: number }}
+ *   azimuth  – degrees from north, CW (0=N 90=E 180=S 270=W)
+ *   altitude – degrees above horizon (negative = below horizon)
+ */
+function sunPosition(date, latDeg, lngDeg) {
+  const D2R = Math.PI / 180;
+  const JD  = date.getTime() / 86400000 + 2440587.5;  // Julian Date
+  const n   = JD - 2451545.0;                          // days since J2000.0
+
+  // Mean longitude and mean anomaly (degrees)
+  const L0  = ((280.460  + 0.9856474 * n) % 360 + 360) % 360;
+  const M   = ((357.528  + 0.9856003 * n) % 360 + 360) % 360;
+
+  // Ecliptic longitude → right ascension + declination
+  const lam = (L0 + 1.915 * Math.sin(M * D2R) + 0.020 * Math.sin(2 * M * D2R)) * D2R;
+  const eps = (23.439 - 0.0000004 * n) * D2R;                      // obliquity
+  const RA  = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam));
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lam));
+
+  // Greenwich Mean Sidereal Time → Local Hour Angle
+  const GMST = ((280.46061837 + 360.98564736629 * n) % 360 + 360) % 360;
+  let HA = (GMST + lngDeg - RA / D2R + 720) % 360;
+  if (HA > 180) HA -= 360;                                          // [-180, 180]
+  const HA_r = HA * D2R;
+
+  const lat    = latDeg * D2R;
+  const sinAlt = Math.sin(lat) * Math.sin(dec)
+               + Math.cos(lat) * Math.cos(dec) * Math.cos(HA_r);
+  const altitude = Math.asin(Math.max(-1, Math.min(1, sinAlt))) / D2R;
+
+  const cosAlt = Math.cos(altitude * D2R);
+  const cosAz  = cosAlt > 1e-8
+    ? (Math.sin(dec) - Math.sin(lat) * sinAlt) / (cosAlt * Math.cos(lat))
+    : 0;
+  let azimuth = Math.acos(Math.max(-1, Math.min(1, cosAz))) / D2R;
+  if (HA_r > 0) azimuth = 360 - azimuth;  // afternoon: sun moves west
+
+  return { azimuth, altitude };
+}
+
+/**
+ * Compute a hillshade RGBA pixel array from a Terrarium elevation tile.
+ * Shadow pixels are dark blue-grey; lit pixels are transparent.
+ * Sun direction is read from state.shadowSun.
+ *
+ * Surface normal: cross(tangent_east, tangent_north) in (E, N, Up) = (-dz_east, dz_south, 1)
+ */
+function computeHillshade(data, mpp) {
+  const { azimuth, altitude } = state.shadowSun;
+  const D2R = Math.PI / 180;
+  const az  = azimuth  * D2R;
+  const alt = altitude * D2R;
+  // Sun unit vector in (east, north, up)
+  const lx = Math.sin(az) * Math.cos(alt);
+  const ly = Math.cos(az) * Math.cos(alt);
+  const lz = Math.sin(alt);
+
+  // Decode all 256×256 elevations first (Terrarium: R*256 + G + B/256 - 32768)
+  const elev = new Float32Array(65536);
+  for (let i = 0; i < 65536; i++) {
+    const d = i << 2;
+    elev[i] = data[d] * 256 + data[d + 1] + data[d + 2] / 256 - 32768;
+  }
+
+  const out   = new Uint8ClampedArray(65536 << 2);
+  const night = lz <= 0;
+
+  for (let y = 0; y < 256; y++) {
+    const yN = y > 0   ? y - 1 : 0;
+    const yS = y < 255 ? y + 1 : 255;
+    for (let x = 0; x < 256; x++) {
+      const xW = x > 0   ? x - 1 : 0;
+      const xE = x < 255 ? x + 1 : 255;
+
+      // Finite-difference gradient (dimensionless: metres elevation / metre horizontal)
+      const dze = (elev[y  * 256 + xE] - elev[y  * 256 + xW]) / (2 * mpp);
+      const dzs = (elev[yS * 256 + x ] - elev[yN * 256 + x ]) / (2 * mpp);
+
+      // Normal = (-dze, dzs, 1) in (east, north, up); Lambertian dot product
+      const len   = Math.sqrt(dze * dze + dzs * dzs + 1);
+      const shade = Math.max(0, (-dze * lx + dzs * ly + lz) / len);
+
+      // Transparent where lit, dark blue-grey where in shadow
+      const a = night ? 210 : Math.round((1 - shade) * 190);
+      const i = (y * 256 + x) << 2;
+      out[i]     = 10;
+      out[i + 1] = 15;
+      out[i + 2] = 35;
+      out[i + 3] = a;
+    }
+  }
+  return out;
+}
+
 /* ─── Elevation tile fetching ────────────────────────────────────────── */
 
 function terrariumUrl(x, y, z) {
@@ -524,6 +630,32 @@ const slopeLayer = new SlopeLayer({
   zIndex: 400,
 });
 
+/* ─── Shadow (hillshade) layer ───────────────────────────────────────── */
+
+const ShadowLayer = L.GridLayer.extend({
+  createTile(coords, done) {
+    const canvas = document.createElement('canvas');
+    canvas.width  = 256;
+    canvas.height = 256;
+    const mpp = metersPerPixel(coords.z, coords);
+    fetchElevTile(coords.x, coords.y, coords.z).then(data => {
+      if (data) {
+        const ctx = canvas.getContext('2d');
+        ctx.putImageData(new ImageData(computeHillshade(data, mpp), 256, 256), 0, 0);
+      }
+      done(null, canvas);
+    }).catch(() => done(null, canvas));
+    return canvas;
+  },
+});
+
+const shadowLayer = new ShadowLayer({
+  opacity: 1,
+  maxZoom: 18,
+  pane:    'overlayPane',
+  zIndex:  450,    // above slope overlay (400)
+});
+
 /** Reload slope tiles when settings change (debounced). */
 let redrawTimer = null;
 function redrawSlope() {
@@ -535,6 +667,45 @@ function redrawSlope() {
       slopeLayer.redraw();
     }
   }, 250);
+}
+
+/**
+ * Recompute sun position from state.shadowDate + current map centre, then
+ * redraw the 2D hillshade overlay and/or update MapLibre 3D lighting.
+ */
+function updateShadow() {
+  const c   = map.getCenter();
+  const sun = sunPosition(state.shadowDate, c.lat, c.lng);
+  state.shadowSun = sun;
+
+  // Update the altitude badge in the shadow bar
+  const altEl = document.getElementById('shadow-alt');
+  if (altEl) {
+    if (sun.altitude > 0) {
+      altEl.textContent = `${Math.round(sun.altitude)}°`;
+      altEl.className   = 'shadow-alt day';
+    } else {
+      altEl.textContent = 'night';
+      altEl.className   = 'shadow-alt night';
+    }
+  }
+
+  // Update MapLibre 3D lighting when 3D view is visible
+  if (map3d && !map3dEl.classList.contains('hidden')) {
+    try {
+      map3d.setLight({
+        anchor:    'map',
+        position:  [1.5, sun.azimuth, Math.max(0, 90 - sun.altitude)],
+        color:     sun.altitude > 0 ? '#ffffff' : '#334466',
+        intensity: sun.altitude > 0 ? Math.min(1, sun.altitude / 45 + 0.3) : 0.1,
+      });
+    } catch { /* setLight signature differs across MapLibre versions */ }
+  }
+
+  // Redraw 2D hillshade when 2D view is visible
+  if (state.shadowActive && map3dEl.classList.contains('hidden')) {
+    shadowLayer.redraw();
+  }
 }
 
 /* ─── Loading state tracking ─────────────────────────────────────────── */
@@ -716,6 +887,74 @@ function applyApiKey(key) {
 btnSaveKey.addEventListener('click', () => applyApiKey(apiKeyInput.value));
 apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyApiKey(apiKeyInput.value); });
 
+// Shadow overlay
+const btnShadow     = document.getElementById('btn-shadow');
+const shadowBarEl   = document.getElementById('shadow-bar');
+const shadowDateEl  = document.getElementById('shadow-date');
+const shadowTimeEl  = document.getElementById('shadow-time');
+const shadowLabelEl = document.getElementById('shadow-time-label');
+
+function _fmtTime(totalMin) {
+  return String(Math.floor(totalMin / 60)).padStart(2, '0') + ':' +
+         String(totalMin % 60).padStart(2, '0');
+}
+
+function _toDateInputVal(date) {
+  return date.getFullYear() + '-' +
+         String(date.getMonth() + 1).padStart(2, '0') + '-' +
+         String(date.getDate()).padStart(2, '0');
+}
+
+function _applyShadowDateTime() {
+  const mins  = parseInt(shadowTimeEl.value, 10);
+  const parts = shadowDateEl.value.split('-').map(Number);
+  if (parts.length === 3 && !parts.some(isNaN)) {
+    state.shadowDate = new Date(parts[0], parts[1] - 1, parts[2],
+                                Math.floor(mins / 60), mins % 60, 0, 0);
+  }
+  updateShadow();
+}
+
+let _shadowTimer = null;
+
+btnShadow.addEventListener('click', () => {
+  state.shadowActive = !state.shadowActive;
+  btnShadow.classList.toggle('active', state.shadowActive);
+
+  if (state.shadowActive) {
+    // Initialise bar to current local time
+    const now = new Date();
+    state.shadowDate       = now;
+    shadowDateEl.value     = _toDateInputVal(now);
+    const nowMin           = now.getHours() * 60 + now.getMinutes();
+    shadowTimeEl.value     = nowMin;
+    shadowLabelEl.textContent = _fmtTime(nowMin);
+    shadowBarEl.classList.remove('hidden');
+    updateShadow();
+    if (map3dEl.classList.contains('hidden')) shadowLayer.addTo(map);
+  } else {
+    shadowBarEl.classList.add('hidden');
+    if (map.hasLayer(shadowLayer)) map.removeLayer(shadowLayer);
+  }
+});
+
+// Update label immediately while dragging, debounce the expensive redraw
+shadowTimeEl.addEventListener('input', () => {
+  shadowLabelEl.textContent = _fmtTime(parseInt(shadowTimeEl.value, 10));
+  clearTimeout(_shadowTimer);
+  _shadowTimer = setTimeout(_applyShadowDateTime, 100);
+});
+
+shadowDateEl.addEventListener('change', _applyShadowDateTime);
+
+// Keep sun position current as the user pans to new latitudes
+map.on('moveend', () => {
+  if (state.shadowActive) {
+    const c = map.getCenter();
+    state.shadowSun = sunPosition(state.shadowDate, c.lat, c.lng);
+  }
+});
+
 // Geolocation + device heading
 const btnLocate = document.getElementById('btn-locate');
 
@@ -726,7 +965,7 @@ const btnLocate = document.getElementById('btn-locate');
    some privacy-focused browsers). */
 function locationIcon(heading) {
   const arrow = heading !== null
-    ? `<g transform="rotate(${heading})">
+    ? `<g transform="rotate(${((heading - state.bearing) % 360 + 360) % 360})">
          <path d="M0,-18 L-8,-36 L0,-44 L8,-36 Z"
                fill="#4fc3f7" fill-opacity="0.95"
                stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
@@ -751,6 +990,7 @@ let _orientHdlr   = null;   // deviceorientation handler ref
 let _deviceHead   = null;   // current compass heading (degrees, or null)
 let _trackingOn   = false;
 let _firstFix     = true;
+let _lastIconAngle = null;   // throttle icon rebuilds; reset on tracking stop
 
 function _updateLocMarker(latlng, accuracy) {
   if (!_locMarker) {
@@ -779,7 +1019,17 @@ function _startOrientTracking() {
     }
     if (h !== null) {
       _deviceHead = h;
-      if (_locMarker) _locMarker.setIcon(locationIcon(_deviceHead));
+      setMapBearing(h);   // auto-rotate map so device heading faces up
+      if (_locMarker) {
+        // Arrow angle after map rotation = heading - bearing = 0 (always up).
+        // Only rebuild the icon when this angle changes noticeably (first fix or
+        // manual bearing override). This avoids 10+ DOM rebuilds per second.
+        const ang = ((h - state.bearing) % 360 + 360) % 360;
+        if (_lastIconAngle === null || Math.abs(ang - _lastIconAngle) >= 2) {
+          _lastIconAngle = ang;
+          _locMarker.setIcon(locationIcon(h));
+        }
+      }
     }
   };
 
@@ -814,8 +1064,9 @@ function _stopTracking() {
   _stopOrientTracking();
   if (_locMarker)   { map.removeLayer(_locMarker);   _locMarker   = null; }
   if (_locAccuracy) { map.removeLayer(_locAccuracy); _locAccuracy = null; }
-  _trackingOn = false;
-  _firstFix   = true;
+  _trackingOn    = false;
+  _firstFix      = true;
+  _lastIconAngle = null;
   btnLocate.classList.remove('active');
   btnLocate.style.opacity = '';
 }
@@ -828,8 +1079,9 @@ btnLocate.addEventListener('click', () => {
     return;
   }
 
-  _trackingOn = true;
-  _firstFix   = true;
+  _trackingOn    = true;
+  _firstFix      = true;
+  _lastIconAngle = null;
   btnLocate.classList.add('active');
   btnLocate.style.opacity = '0.6';
 
@@ -1116,7 +1368,8 @@ btn3d.addEventListener('click', () => {
     map3dEl.classList.remove('hidden');
     btn3d.classList.add('active');
     btn3d.setAttribute('aria-pressed', 'true');
-    if (state.slopeActive) showToast('Slope overlay is not shown in 3D view');
+    if (state.slopeActive)  showToast('Slope overlay is not shown in 3D view');
+    if (state.shadowActive && map.hasLayer(shadowLayer)) map.removeLayer(shadowLayer);
     // Defer init/resize by one frame so the browser computes the container's
     // layout (clientWidth/clientHeight) before MapLibre reads it.
     requestAnimationFrame(() => {
@@ -1124,6 +1377,7 @@ btn3d.addEventListener('click', () => {
       map3d.setCenter([c.lng, c.lat]);
       map3d.setZoom(z);
       map3d.resize();                  // repeat visits: re-measure container
+      if (state.shadowActive) updateShadow();  // apply 3D sun lighting
     });
   } else {
     // Switch 3D → 2D; sync position back to Leaflet
@@ -1135,5 +1389,9 @@ btn3d.addEventListener('click', () => {
     mapEl.classList.remove('hidden');
     btn3d.classList.remove('active');
     btn3d.setAttribute('aria-pressed', 'false');
+    if (state.shadowActive) {
+      shadowLayer.addTo(map);
+      updateShadow();
+    }
   }
 });
