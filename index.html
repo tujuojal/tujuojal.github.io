@@ -37,6 +37,12 @@
             <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
         </button>
+        <button id="btn-shadow" class="icon-btn" title="Sun shadow overlay" aria-label="Toggle sun shadow overlay">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
         <button id="btn-compass" class="icon-btn" title="Reset north (tap) · Two-finger rotate on map" aria-label="Reset map to north">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.2s ease">
             <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.2" opacity="0.4"/>
@@ -61,6 +67,17 @@
         </button>
       </div>
     </header>
+
+    <!-- Sun shadow time bar (slides down below topbar when active) -->
+    <div id="shadow-bar" class="hidden" aria-label="Sun shadow time controls">
+      <div class="shadow-inner">
+        <input type="date"  id="shadow-date"  class="shadow-date-input" aria-label="Shadow date">
+        <input type="range" id="shadow-time"  class="shadow-time-slider"
+               min="0" max="1439" value="720" step="15" aria-label="Time of day">
+        <span  id="shadow-time-label" class="shadow-time-label" aria-live="polite">12:00</span>
+        <span  id="shadow-alt" class="shadow-alt" title="Sun altitude above horizon"></span>
+      </div>
+    </div>
 
     <!-- Zoom info hint -->
     <div id="zoom-hint" class="hidden">Zoom in to calculate slopes</div>

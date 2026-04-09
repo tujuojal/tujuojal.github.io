@@ -629,3 +629,83 @@ input[type="text"]::placeholder {
   background: none !important;
   border: none !important;
 }
+
+/* ─── Sun shadow bar ─────────────────────────────────────────────────── */
+#shadow-bar {
+  position: absolute;
+  top: var(--topbar-h);
+  left: 0;
+  right: 0;
+  z-index: 799;
+  background: rgba(13, 27, 42, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.shadow-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  height: 44px;
+}
+
+.shadow-date-input {
+  color-scheme: dark;
+  background: var(--bg-2);
+  color: var(--text-0);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 6px;
+  font-size: 13px;
+  flex-shrink: 0;
+  width: 118px;
+}
+
+.shadow-time-slider {
+  flex: 1;
+  min-width: 60px;
+  -webkit-appearance: none;
+  height: 4px;
+  background: var(--bg-3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.shadow-time-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+}
+.shadow-time-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+}
+
+.shadow-time-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-0);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 38px;
+  text-align: center;
+}
+
+.shadow-alt {
+  font-size: 12px;
+  flex-shrink: 0;
+  min-width: 40px;
+  text-align: right;
+}
+.shadow-alt.day   { color: #ffd54f; }
+.shadow-alt.night { color: var(--text-2); }
