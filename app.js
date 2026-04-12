@@ -963,36 +963,82 @@ const btnLocate = document.getElementById('btn-locate');
    Uses two concentric circles instead of a CSS filter for maximum cross-browser
    compatibility (filter="..." on SVG attributes is non-standard and broken in
    some privacy-focused browsers). */
-function locationIcon(heading) {
-  const arrow = heading !== null
-    ? `<g transform="rotate(${((heading - state.bearing) % 360 + 360) % 360})">
+
+/** Returns the inner SVG markup shared by 2D and 3D location markers.
+ *  arrowAngle: degrees to rotate the arrow (null = no arrow shown). */
+function _locMarkerSVG(arrowAngle) {
+  const arrow = arrowAngle !== null
+    ? `<g transform="rotate(${arrowAngle})">
          <path d="M0,-18 L-8,-36 L0,-44 L8,-36 Z"
                fill="#4fc3f7" fill-opacity="0.95"
                stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
        </g>`
     : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="-40 -40 80 80">
+    ${arrow}
+    <circle r="18" fill="#4fc3f7" fill-opacity="0.2"/>
+    <circle r="9"  fill="#4fc3f7" stroke="white" stroke-width="3"/>
+  </svg>`;
+}
+
+function locationIcon(heading) {
   return L.divIcon({
-    className: 'pows-loc-marker',   // keeps Leaflet default display:block
-    html: `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="-40 -40 80 80">
-      ${arrow}
-      <circle r="18" fill="#4fc3f7" fill-opacity="0.2"/>
-      <circle r="9"  fill="#4fc3f7" stroke="white" stroke-width="3"/>
-    </svg>`,
+    className: 'pows-loc-marker',
+    html:       _locMarkerSVG(heading !== null
+                  ? ((heading - state.bearing) % 360 + 360) % 360
+                  : null),
     iconSize:   [80, 80],
     iconAnchor: [40, 40],
   });
 }
 
-let _locMarker    = null;   // L.marker for the dot + arrow
-let _locAccuracy  = null;   // L.circle for accuracy ring
+let _locMarker    = null;   // L.marker for the dot + arrow  (2D)
+let _locAccuracy  = null;   // L.circle for accuracy ring    (2D)
+let _3dLocMarker  = null;   // maplibregl.Marker             (3D)
+let _3dLocEl      = null;   // DOM element inside _3dLocMarker
+let _3dArrowShown = false;  // whether the 3D arrow is currently rendered
+let _lastPos      = null;   // { lat, lng } – last GPS fix, used when switching views
 let _watchId      = null;   // geolocation watchPosition id
 let _orientHdlr   = null;   // deviceorientation handler ref
 let _deviceHead   = null;   // current compass heading (degrees, or null)
 let _trackingOn   = false;
 let _firstFix     = true;
-let _lastIconAngle = null;   // throttle icon rebuilds; reset on tracking stop
+let _lastIconAngle = null;   // throttle 2D icon rebuilds; reset on tracking stop
+
+/** Create or update the MapLibre 3D location dot+arrow marker. */
+function _update3DLocMarker() {
+  if (!map3d || !_lastPos) return;
+  const lngLat = [_lastPos.lng, _lastPos.lat];
+  // Arrow always points up (0°) because map bearing is set to device heading.
+  // If heading is unknown, omit the arrow.
+  const svg = _locMarkerSVG(_deviceHead !== null ? 0 : null);
+  if (!_3dLocEl) {
+    _3dLocEl = document.createElement('div');
+    _3dLocEl.className = 'pows-loc-marker';
+    _3dLocEl.style.cssText = 'width:80px;height:80px;display:block';
+  }
+  _3dLocEl.innerHTML = svg;
+  _3dArrowShown = _deviceHead !== null;
+  if (!_3dLocMarker) {
+    _3dLocMarker = new maplibregl.Marker({ element: _3dLocEl, anchor: 'center' })
+      .setLngLat(lngLat)
+      .addTo(map3d);
+  } else {
+    _3dLocMarker.setLngLat(lngLat);
+  }
+}
+
+/** Remove the 3D marker from the map and reset state. */
+function _remove3DLocMarker() {
+  if (_3dLocMarker) { _3dLocMarker.remove(); _3dLocMarker = null; }
+  _3dLocEl     = null;
+  _3dArrowShown = false;
+}
 
 function _updateLocMarker(latlng, accuracy) {
+  _lastPos = { lat: latlng[0], lng: latlng[1] };
+
+  // 2D Leaflet marker (maintained even when the 2D map is hidden)
   if (!_locMarker) {
     _locAccuracy = L.circle(latlng, {
       radius: accuracy, color: '#4fc3f7', fillColor: '#4fc3f7',
@@ -1004,6 +1050,11 @@ function _updateLocMarker(latlng, accuracy) {
   } else {
     _locMarker.setLatLng(latlng).setIcon(locationIcon(_deviceHead));
     _locAccuracy.setLatLng(latlng).setRadius(accuracy);
+  }
+
+  // 3D MapLibre marker (only when 3D view is visible)
+  if (map3d && !map3dEl.classList.contains('hidden')) {
+    _update3DLocMarker();
   }
 }
 
@@ -1019,15 +1070,28 @@ function _startOrientTracking() {
     }
     if (h !== null) {
       _deviceHead = h;
-      setMapBearing(h);   // auto-rotate map so device heading faces up
-      if (_locMarker) {
-        // Arrow angle after map rotation = heading - bearing = 0 (always up).
-        // Only rebuild the icon when this angle changes noticeably (first fix or
-        // manual bearing override). This avoids 10+ DOM rebuilds per second.
-        const ang = ((h - state.bearing) % 360 + 360) % 360;
-        if (_lastIconAngle === null || Math.abs(ang - _lastIconAngle) >= 2) {
-          _lastIconAngle = ang;
-          _locMarker.setIcon(locationIcon(h));
+
+      if (map3d && !map3dEl.classList.contains('hidden')) {
+        // ── 3D mode ───────────────────────────────────────────────────
+        // Instantly rotate the camera so device heading faces "up".
+        map3d.jumpTo({ bearing: h });
+        // Show the arrow the first time heading arrives (arrow always
+        // points up since map bearing = device heading).
+        if (_3dLocEl && !_3dArrowShown) {
+          _3dArrowShown = true;
+          _3dLocEl.innerHTML = _locMarkerSVG(0);
+        }
+      } else {
+        // ── 2D mode ───────────────────────────────────────────────────
+        setMapBearing(h);
+        if (_locMarker) {
+          // Arrow angle = heading - bearing = 0 when auto-rotating.
+          // Throttle icon rebuilds to avoid 10+ DOM ops per second.
+          const ang = ((h - state.bearing) % 360 + 360) % 360;
+          if (_lastIconAngle === null || Math.abs(ang - _lastIconAngle) >= 2) {
+            _lastIconAngle = ang;
+            _locMarker.setIcon(locationIcon(h));
+          }
         }
       }
     }
@@ -1064,6 +1128,8 @@ function _stopTracking() {
   _stopOrientTracking();
   if (_locMarker)   { map.removeLayer(_locMarker);   _locMarker   = null; }
   if (_locAccuracy) { map.removeLayer(_locAccuracy); _locAccuracy = null; }
+  _remove3DLocMarker();
+  _lastPos       = null;
   _trackingOn    = false;
   _firstFix      = true;
   _lastIconAngle = null;
@@ -1089,7 +1155,15 @@ btnLocate.addEventListener('click', () => {
     pos => {
       btnLocate.style.opacity = '';
       const latlng = [pos.coords.latitude, pos.coords.longitude];
-      if (_firstFix) { _firstFix = false; map.setView(latlng, Math.max(map.getZoom(), 13)); }
+      if (_firstFix) {
+        _firstFix = false;
+        map.setView(latlng, Math.max(map.getZoom(), 13));
+        // Also pan the 3D map if it is currently visible
+        if (map3d && !map3dEl.classList.contains('hidden')) {
+          map3d.jumpTo({ center: [latlng[1], latlng[0]],
+                         zoom: Math.max(map3d.getZoom(), 13) });
+        }
+      }
       _updateLocMarker(latlng, pos.coords.accuracy);
       _startOrientTracking();
     },
@@ -1378,6 +1452,11 @@ btn3d.addEventListener('click', () => {
       map3d.setZoom(z);
       map3d.resize();                  // repeat visits: re-measure container
       if (state.shadowActive) updateShadow();  // apply 3D sun lighting
+      // Restore location marker + heading in 3D
+      if (_trackingOn && _lastPos) {
+        _update3DLocMarker();
+        if (_deviceHead !== null) map3d.jumpTo({ bearing: _deviceHead });
+      }
     });
   } else {
     // Switch 3D → 2D; sync position back to Leaflet
@@ -1385,6 +1464,10 @@ btn3d.addEventListener('click', () => {
       const c = map3d.getCenter();
       map.setView([c.lat, c.lng], map3d.getZoom());
     }
+    // Remove the 3D marker; the 2D marker is already on the hidden Leaflet map
+    _remove3DLocMarker();
+    // Restore 2D bearing from device heading if tracking
+    if (_trackingOn && _deviceHead !== null) setMapBearing(_deviceHead);
     map3dEl.classList.add('hidden');
     mapEl.classList.remove('hidden');
     btn3d.classList.remove('active');
