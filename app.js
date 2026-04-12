@@ -1005,12 +1005,27 @@ let _trackingOn   = false;
 let _firstFix     = true;
 let _lastIconAngle = null;   // throttle 2D icon rebuilds; reset on tracking stop
 
-/** Create or update the MapLibre 3D location dot+arrow marker. */
+/** Create or update the MapLibre 3D location dot+arrow marker.
+ *
+ *  pitchAlignment:'viewport'    – element always faces the screen (not the ground),
+ *                                 so it stays visible even when the map is tilted 50°.
+ *  rotationAlignment:'viewport' – element doesn't spin with map bearing, so the
+ *                                 up-arrow always points screen-up (= device heading).
+ *  queryTerrainElevation        – lift the anchor to the terrain surface so the dot
+ *                                 doesn't get buried underground with exaggeration=1.5.
+ */
 function _update3DLocMarker() {
   if (!map3d || !_lastPos) return;
   const lngLat = [_lastPos.lng, _lastPos.lat];
-  // Arrow always points up (0°) because map bearing is set to device heading.
-  // If heading is unknown, omit the arrow.
+
+  // Get the visual terrain elevation so the marker sits on the surface,
+  // not at sea level (which would be underground on ski slopes).
+  let elev = 0;
+  try {
+    const e = map3d.queryTerrainElevation(lngLat, { exaggerated: true });
+    if (typeof e === 'number' && isFinite(e)) elev = e;
+  } catch { /* terrain not yet loaded – fall back to 0 */ }
+
   const svg = _locMarkerSVG(_deviceHead !== null ? 0 : null);
   if (!_3dLocEl) {
     _3dLocEl = document.createElement('div');
@@ -1019,12 +1034,16 @@ function _update3DLocMarker() {
   }
   _3dLocEl.innerHTML = svg;
   _3dArrowShown = _deviceHead !== null;
+
   if (!_3dLocMarker) {
-    _3dLocMarker = new maplibregl.Marker({ element: _3dLocEl, anchor: 'center' })
-      .setLngLat(lngLat)
-      .addTo(map3d);
+    _3dLocMarker = new maplibregl.Marker({
+      element:            _3dLocEl,
+      anchor:             'center',
+      pitchAlignment:     'viewport',   // always face the screen
+      rotationAlignment:  'viewport',   // don't spin with map bearing
+    }).setLngLat([...lngLat, elev]).addTo(map3d);
   } else {
-    _3dLocMarker.setLngLat(lngLat);
+    _3dLocMarker.setLngLat([...lngLat, elev]);
   }
 }
 
@@ -1104,15 +1123,10 @@ function _startOrientTracking() {
     window.addEventListener('deviceorientation', _orientHdlr);
   };
 
-  if (typeof DeviceOrientationEvent !== 'undefined' &&
-      typeof DeviceOrientationEvent.requestPermission === 'function') {
-    // iOS 13+ requires a user-gesture permission prompt
-    DeviceOrientationEvent.requestPermission()
-      .then(s => { if (s === 'granted') attach(); })
-      .catch(() => {});
-  } else {
-    attach();
-  }
+  // On non-iOS (no requestPermission), attach immediately.
+  // On iOS the click handler already called requestPermission() and
+  // permission was granted before _startOrientTracking() is called.
+  attach();
 }
 
 function _stopOrientTracking() {
@@ -1137,7 +1151,7 @@ function _stopTracking() {
   btnLocate.style.opacity = '';
 }
 
-btnLocate.addEventListener('click', () => {
+btnLocate.addEventListener('click', async () => {
   if (_trackingOn) { _stopTracking(); return; }
 
   if (!navigator.geolocation) {
@@ -1145,11 +1159,28 @@ btnLocate.addEventListener('click', () => {
     return;
   }
 
+  // ── iOS 13+ orientation permission ─────────────────────────────────
+  // requestPermission() MUST be called synchronously within a user-gesture
+  // handler (click/touch). Calling it later from an async GPS callback
+  // makes iOS silently deny it, so we do it here first.
+  if (typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try {
+      const perm = await DeviceOrientationEvent.requestPermission();
+      if (perm !== 'granted') showToast('Motion access denied — direction arrow unavailable');
+    } catch {
+      showToast('Could not request motion permission');
+    }
+  }
+
   _trackingOn    = true;
   _firstFix      = true;
   _lastIconAngle = null;
   btnLocate.classList.add('active');
   btnLocate.style.opacity = '0.6';
+
+  // Start orientation tracking immediately (permission already resolved above)
+  _startOrientTracking();
 
   _watchId = navigator.geolocation.watchPosition(
     pos => {
@@ -1165,7 +1196,6 @@ btnLocate.addEventListener('click', () => {
         }
       }
       _updateLocMarker(latlng, pos.coords.accuracy);
-      _startOrientTracking();
     },
     err => {
       showToast('Could not get location: ' + err.message);
@@ -1427,6 +1457,8 @@ function init3D() {
   map3d.on('load', () => {
     map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
     terrain3d = true;
+    // Re-position 3D location marker now that queryTerrainElevation works
+    if (_trackingOn && _lastPos) _update3DLocMarker();
   });
 }
 
