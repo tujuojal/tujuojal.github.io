@@ -1215,7 +1215,6 @@ btnLocate.addEventListener('click', async () => {
 
   _trackingOn    = true;
   _firstFix      = true;
-  _lastIconAngle = null;
   btnLocate.classList.add('active');
   btnLocate.style.opacity = '0.6';
 
