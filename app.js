@@ -1084,14 +1084,6 @@ function _update3DLocMarker() {
   });
 }
 
-/** Make the direction arrow visible once a heading is known. */
-function _show3DArrow() {
-  if (!_3dLocActive || !map3d) return;
-  if (map3d.getLayer(_3D_ARROW)) {
-    map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
-  }
-}
-
 /** Remove 3D layers and source when leaving 3D view. */
 function _remove3DLocMarker() {
   if (!map3d || !_3dLocActive) return;
@@ -1140,17 +1132,18 @@ function _startOrientTracking() {
 
       if (map3d && !map3dEl.classList.contains('hidden')) {
         // ── 3D mode ───────────────────────────────────────────────────
-        // Instantly rotate the camera so device heading faces "up".
-        map3d.jumpTo({ bearing: h });
-        // Show the arrow the first time heading arrives (arrow always
-        // points up since map bearing = device heading).
-        _show3DArrow();
+        // Rotate only the arrow; leave the map bearing alone so two-finger
+        // pan/zoom/rotate continues to work normally.
+        if (_3dLocActive && map3d.getLayer(_3D_ARROW)) {
+          const rot = ((h - map3d.getBearing()) % 360 + 360) % 360;
+          map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
+          map3d.setLayoutProperty(_3D_ARROW, 'text-rotate', rot);
+        }
       } else {
         // ── 2D mode ───────────────────────────────────────────────────
-        setMapBearing(h);
+        // Arrow angle = heading relative to current map bearing.
+        // Don't call setMapBearing() here; let two-finger gestures own rotation.
         if (_locMarker) {
-          // Arrow angle = heading - bearing = 0 when auto-rotating.
-          // Throttle icon rebuilds to avoid 10+ DOM ops per second.
           const ang = ((h - state.bearing) % 360 + 360) % 360;
           if (_lastIconAngle === null || Math.abs(ang - _lastIconAngle) >= 2) {
             _lastIconAngle = ang;
@@ -1379,6 +1372,14 @@ function setMapBearing(deg) {
   mapEl.style.transform = `translate(-50%, -50%) rotate(${state.bearing}deg)`;
   compassIcon.style.transform = `rotate(${state.bearing}deg)`;
   btnCompass.classList.toggle('active', state.bearing !== 0);
+  // Re-sync the location arrow when the user two-finger rotates the 2D map
+  if (_locMarker && _deviceHead !== null) {
+    const ang = ((_deviceHead - state.bearing) % 360 + 360) % 360;
+    if (_lastIconAngle === null || Math.abs(ang - _lastIconAngle) >= 2) {
+      _lastIconAngle = ang;
+      _locMarker.setIcon(locationIcon(_deviceHead));
+    }
+  }
 }
 
 btnCompass.addEventListener('click', () => setMapBearing(0));
@@ -1502,8 +1503,14 @@ function init3D() {
   map3d.on('load', () => {
     map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
     terrain3d = true;
-    // Re-position 3D location marker now that queryTerrainElevation works
     if (_trackingOn && _lastPos) _update3DLocMarker();
+    // Keep the direction arrow aligned when user two-finger rotates the 3D map
+    map3d.on('rotate', () => {
+      if (_3dLocActive && _deviceHead !== null && map3d.getLayer(_3D_ARROW)) {
+        const rot = ((_deviceHead - map3d.getBearing()) % 360 + 360) % 360;
+        map3d.setLayoutProperty(_3D_ARROW, 'text-rotate', rot);
+      }
+    });
   });
 }
 
