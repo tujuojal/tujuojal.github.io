@@ -994,9 +994,7 @@ function locationIcon(heading) {
 
 let _locMarker    = null;   // L.marker for the dot + arrow  (2D)
 let _locAccuracy  = null;   // L.circle for accuracy ring    (2D)
-let _3dLocMarker  = null;   // maplibregl.Marker             (3D)
-let _3dLocEl      = null;   // DOM element inside _3dLocMarker
-let _3dArrowShown = false;  // whether the 3D arrow is currently rendered
+let _3dLocActive  = false;  // true when 3D GeoJSON layers are added to map3d
 let _lastPos      = null;   // { lat, lng } – last GPS fix, used when switching views
 let _watchId      = null;   // geolocation watchPosition id
 let _orientHdlr   = null;   // deviceorientation handler ref
@@ -1005,53 +1003,103 @@ let _trackingOn   = false;
 let _firstFix     = true;
 let _lastIconAngle = null;   // throttle 2D icon rebuilds; reset on tracking stop
 
-/** Create or update the MapLibre 3D location dot+arrow marker.
- *
- *  pitchAlignment:'viewport'    – element always faces the screen (not the ground),
- *                                 so it stays visible even when the map is tilted 50°.
- *  rotationAlignment:'viewport' – element doesn't spin with map bearing, so the
- *                                 up-arrow always points screen-up (= device heading).
- *  queryTerrainElevation        – lift the anchor to the terrain surface so the dot
- *                                 doesn't get buried underground with exaggeration=1.5.
- */
+/* ─── 3D location indicator (GeoJSON + WebGL circle/symbol layers) ──── */
+// Using WebGL layers instead of HTML maplibregl.Marker avoids terrain
+// occlusion — HTML markers get buried under terrain with exaggeration=1.5.
+const _3D_SRC   = 'pows-loc';
+const _3D_RING  = 'pows-loc-ring';
+const _3D_DOT   = 'pows-loc-dot';
+const _3D_ARROW = 'pows-loc-arrow';
+
+/** Add source + layers to map3d the first time (called lazily). */
+function _setup3DLocLayers() {
+  if (!map3d || _3dLocActive) return;
+  if (!map3d.isStyleLoaded()) return;  // defer until map 'load' fires
+
+  map3d.addSource(_3D_SRC, {
+    type: 'geojson',
+    data: { type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] }, properties: {} },
+  });
+
+  // Translucent accuracy halo
+  map3d.addLayer({
+    id: _3D_RING, type: 'circle', source: _3D_SRC,
+    paint: {
+      'circle-radius': 24,
+      'circle-color': '#4fc3f7',
+      'circle-opacity': 0.18,
+      'circle-stroke-width': 0,
+      'circle-pitch-alignment': 'viewport',
+    },
+  });
+
+  // Solid location dot
+  map3d.addLayer({
+    id: _3D_DOT, type: 'circle', source: _3D_SRC,
+    paint: {
+      'circle-radius': 9,
+      'circle-color': '#4fc3f7',
+      'circle-opacity': 1,
+      'circle-stroke-width': 3,
+      'circle-stroke-color': 'white',
+      'circle-pitch-alignment': 'viewport',
+    },
+  });
+
+  // Direction arrow (always screen-up = device heading, since bearing = heading)
+  map3d.addLayer({
+    id: _3D_ARROW, type: 'symbol', source: _3D_SRC,
+    layout: {
+      'text-field': '▲',
+      'text-size': 20,
+      'text-offset': [0, -2.2],
+      'text-rotation-alignment': 'viewport',
+      'text-pitch-alignment': 'viewport',
+      'text-allow-overlap': true,
+      'text-ignore-placement': true,
+      'visibility': 'none',  // shown once heading arrives
+    },
+    paint: {
+      'text-color': '#4fc3f7',
+      'text-halo-color': 'white',
+      'text-halo-width': 2,
+    },
+  });
+
+  _3dLocActive = true;
+}
+
+/** Move the 3D dot to the current GPS position. */
 function _update3DLocMarker() {
   if (!map3d || !_lastPos) return;
-  const lngLat = [_lastPos.lng, _lastPos.lat];
+  if (!_3dLocActive) _setup3DLocLayers();
+  if (!_3dLocActive) return;  // style not loaded yet – load handler will retry
 
-  // Get the visual terrain elevation so the marker sits on the surface,
-  // not at sea level (which would be underground on ski slopes).
-  let elev = 0;
-  try {
-    const e = map3d.queryTerrainElevation(lngLat, { exaggerated: true });
-    if (typeof e === 'number' && isFinite(e)) elev = e;
-  } catch { /* terrain not yet loaded – fall back to 0 */ }
+  const src = map3d.getSource(_3D_SRC);
+  if (!src) return;
+  src.setData({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [_lastPos.lng, _lastPos.lat] },
+    properties: {},
+  });
+}
 
-  const svg = _locMarkerSVG(_deviceHead !== null ? 0 : null);
-  if (!_3dLocEl) {
-    _3dLocEl = document.createElement('div');
-    _3dLocEl.className = 'pows-loc-marker';
-    _3dLocEl.style.cssText = 'width:80px;height:80px;display:block';
-  }
-  _3dLocEl.innerHTML = svg;
-  _3dArrowShown = _deviceHead !== null;
-
-  if (!_3dLocMarker) {
-    _3dLocMarker = new maplibregl.Marker({
-      element:            _3dLocEl,
-      anchor:             'center',
-      pitchAlignment:     'viewport',   // always face the screen
-      rotationAlignment:  'viewport',   // don't spin with map bearing
-    }).setLngLat([...lngLat, elev]).addTo(map3d);
-  } else {
-    _3dLocMarker.setLngLat([...lngLat, elev]);
+/** Make the direction arrow visible once a heading is known. */
+function _show3DArrow() {
+  if (!_3dLocActive || !map3d) return;
+  if (map3d.getLayer(_3D_ARROW)) {
+    map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
   }
 }
 
-/** Remove the 3D marker from the map and reset state. */
+/** Remove 3D layers and source when leaving 3D view. */
 function _remove3DLocMarker() {
-  if (_3dLocMarker) { _3dLocMarker.remove(); _3dLocMarker = null; }
-  _3dLocEl     = null;
-  _3dArrowShown = false;
+  if (!map3d || !_3dLocActive) return;
+  [_3D_ARROW, _3D_DOT, _3D_RING].forEach(id => {
+    if (map3d.getLayer(id)) map3d.removeLayer(id);
+  });
+  if (map3d.getSource(_3D_SRC)) map3d.removeSource(_3D_SRC);
+  _3dLocActive = false;
 }
 
 function _updateLocMarker(latlng, accuracy) {
@@ -1096,10 +1144,7 @@ function _startOrientTracking() {
         map3d.jumpTo({ bearing: h });
         // Show the arrow the first time heading arrives (arrow always
         // points up since map bearing = device heading).
-        if (_3dLocEl && !_3dArrowShown) {
-          _3dArrowShown = true;
-          _3dLocEl.innerHTML = _locMarkerSVG(0);
-        }
+        _show3DArrow();
       } else {
         // ── 2D mode ───────────────────────────────────────────────────
         setMapBearing(h);
