@@ -958,50 +958,50 @@ map.on('moveend', () => {
 // Geolocation + device heading
 const btnLocate = document.getElementById('btn-locate');
 
-/* SVG location marker: blue dot + directional arrow pointing at `heading` degrees.
-   heading=null → arrow hidden (heading unknown).
-   Uses two concentric circles instead of a CSS filter for maximum cross-browser
-   compatibility (filter="..." on SVG attributes is non-standard and broken in
-   some privacy-focused browsers). */
+/* SVG location marker: blue dot + directional arrow.
+   Arrow is hidden by default and rotated via direct DOM setAttribute() so we
+   never have to rebuild the Leaflet icon (avoids setIcon() overhead and any
+   Leaflet icon-caching issues). */
 
-/** Returns the inner SVG markup shared by 2D and 3D location markers.
- *  arrowAngle: degrees to rotate the arrow (null = no arrow shown). */
-function _locMarkerSVG(arrowAngle) {
-  const arrow = arrowAngle !== null
-    ? `<g transform="rotate(${arrowAngle})">
-         <path d="M0,-18 L-8,-36 L0,-44 L8,-36 Z"
-               fill="#4fc3f7" fill-opacity="0.95"
-               stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
-       </g>`
-    : '';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="-40 -40 80 80">
-    ${arrow}
-    <circle r="18" fill="#4fc3f7" fill-opacity="0.2"/>
-    <circle r="9"  fill="#4fc3f7" stroke="white" stroke-width="3"/>
-  </svg>`;
-}
+const _LOC_MARKER_HTML = `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="-40 -40 80 80">
+  <g class="pows-direction-arrow" transform="rotate(0)" style="display:none">
+    <path d="M0,-18 L-8,-36 L0,-44 L8,-36 Z"
+          fill="#4fc3f7" fill-opacity="0.95"
+          stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
+  </g>
+  <circle r="18" fill="#4fc3f7" fill-opacity="0.2"/>
+  <circle r="9"  fill="#4fc3f7" stroke="white" stroke-width="3"/>
+</svg>`;
 
-function locationIcon(heading) {
-  return L.divIcon({
-    className: 'pows-loc-marker',
-    html:       _locMarkerSVG(heading !== null
-                  ? ((heading - state.bearing) % 360 + 360) % 360
-                  : null),
-    iconSize:   [80, 80],
-    iconAnchor: [40, 40],
-  });
+const _staticLocIcon = L.divIcon({
+  className: 'pows-loc-marker',
+  html:      _LOC_MARKER_HTML,
+  iconSize:  [80, 80],
+  iconAnchor:[40, 40],
+});
+
+/** Rotate the 2D direction arrow to match current device heading on screen.
+ *  mapEl is CSS-rotated by state.bearing, so the arrow element inherits that
+ *  rotation.  We subtract it so the total visual angle equals _deviceHead. */
+function _update2DArrow() {
+  if (!_2dArrowEl) return;
+  if (_deviceHead === null) { _2dArrowEl.style.display = 'none'; return; }
+  const ang = ((_deviceHead - state.bearing) % 360 + 360) % 360;
+  _2dArrowEl.setAttribute('transform', `rotate(${ang.toFixed(1)})`);
+  _2dArrowEl.style.display = '';
 }
 
 let _locMarker    = null;   // L.marker for the dot + arrow  (2D)
 let _locAccuracy  = null;   // L.circle for accuracy ring    (2D)
+let _2dArrowEl    = null;   // direct ref to the arrow <g> inside the 2D SVG
 let _3dLocActive  = false;  // true when 3D GeoJSON layers are added to map3d
 let _lastPos      = null;   // { lat, lng } – last GPS fix, used when switching views
-let _watchId      = null;   // geolocation watchPosition id
-let _orientHdlr   = null;   // deviceorientation handler ref
+let _watchId        = null;   // geolocation watchPosition id
+let _orientHdlr     = null;   // absolute-event listener ref (stored for removeEventListener)
+let _orientRelHdlr  = null;   // relative-event listener ref (fallback for iOS)
 let _deviceHead   = null;   // current compass heading (degrees, or null)
 let _trackingOn   = false;
 let _firstFix     = true;
-let _lastIconAngle = null;   // throttle 2D icon rebuilds; reset on tracking stop
 
 /* ─── 3D location indicator (GeoJSON + WebGL circle/symbol layers) ──── */
 // Using WebGL layers instead of HTML maplibregl.Marker avoids terrain
@@ -1082,6 +1082,14 @@ function _update3DLocMarker() {
     geometry: { type: 'Point', coordinates: [_lastPos.lng, _lastPos.lat] },
     properties: {},
   });
+
+  // Initialize the 3D arrow immediately if heading is already known.
+  // This covers the case where orientation events fired before layers were ready.
+  if (_deviceHead !== null && map3d.getLayer(_3D_ARROW)) {
+    const rot = ((_deviceHead - map3d.getBearing()) % 360 + 360) % 360;
+    map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
+    map3d.setLayoutProperty(_3D_ARROW, 'text-rotate', rot);
+  }
 }
 
 /** Remove 3D layers and source when leaving 3D view. */
@@ -1104,10 +1112,15 @@ function _updateLocMarker(latlng, accuracy) {
       fillOpacity: 0.12, weight: 1, interactive: false,
     }).addTo(map);
     _locMarker = L.marker(latlng, {
-      icon: locationIcon(_deviceHead), zIndexOffset: 1000, interactive: false,
+      icon: _staticLocIcon, zIndexOffset: 1000, interactive: false,
     }).addTo(map);
+    // Grab the arrow element directly – we rotate it in place rather than
+    // calling setIcon(), which avoids any Leaflet icon-update quirks.
+    const markerEl = _locMarker.getElement();
+    _2dArrowEl = markerEl ? markerEl.querySelector('.pows-direction-arrow') : null;
+    _update2DArrow();
   } else {
-    _locMarker.setLatLng(latlng).setIcon(locationIcon(_deviceHead));
+    _locMarker.setLatLng(latlng);
     _locAccuracy.setLatLng(latlng).setRadius(accuracy);
   }
 
@@ -1120,59 +1133,48 @@ function _updateLocMarker(latlng, accuracy) {
 function _startOrientTracking() {
   if (_orientHdlr) return;
 
-  _orientHdlr = e => {
+  // Core handler: extracts heading and updates arrows (does NOT touch map bearing).
+  const onHeading = e => {
     let h = null;
     if (typeof e.webkitCompassHeading === 'number' && e.webkitCompassHeading >= 0) {
       h = e.webkitCompassHeading;               // iOS (already CW from North)
     } else if (typeof e.alpha === 'number' && e.alpha !== null) {
       h = (360 - e.alpha) % 360;               // Android: alpha is CCW, flip it
     }
-    if (h !== null) {
-      _deviceHead = h;
+    if (h === null) return;
+    _deviceHead = h;
 
-      if (map3d && !map3dEl.classList.contains('hidden')) {
-        // ── 3D mode ───────────────────────────────────────────────────
-        // Rotate only the arrow; leave the map bearing alone so two-finger
-        // pan/zoom/rotate continues to work normally.
-        if (_3dLocActive && map3d.getLayer(_3D_ARROW)) {
-          const rot = ((h - map3d.getBearing()) % 360 + 360) % 360;
-          map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
-          map3d.setLayoutProperty(_3D_ARROW, 'text-rotate', rot);
-        }
-      } else {
-        // ── 2D mode ───────────────────────────────────────────────────
-        // Arrow angle = heading relative to current map bearing.
-        // Don't call setMapBearing() here; let two-finger gestures own rotation.
-        if (_locMarker) {
-          const ang = ((h - state.bearing) % 360 + 360) % 360;
-          if (_lastIconAngle === null || Math.abs(ang - _lastIconAngle) >= 2) {
-            _lastIconAngle = ang;
-            _locMarker.setIcon(locationIcon(h));
-          }
-        }
+    if (map3d && !map3dEl.classList.contains('hidden')) {
+      // ── 3D mode ───────────────────────────────────────────────────
+      // Only rotate the arrow; map bearing is left to finger gestures.
+      if (_3dLocActive && map3d.getLayer(_3D_ARROW)) {
+        const rot = ((h - map3d.getBearing()) % 360 + 360) % 360;
+        map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
+        map3d.setLayoutProperty(_3D_ARROW, 'text-rotate', rot);
       }
+    } else {
+      // ── 2D mode ───────────────────────────────────────────────────
+      _update2DArrow();
     }
   };
 
-  const attach = () => {
-    // Prefer absolute events (correct compass on Chrome/Android)
-    window.addEventListener('deviceorientationabsolute', _orientHdlr);
-    // Fallback for iOS which only fires 'deviceorientation' (with webkitCompassHeading)
-    window.addEventListener('deviceorientation', _orientHdlr);
-  };
-
-  // On non-iOS (no requestPermission), attach immediately.
-  // On iOS the click handler already called requestPermission() and
-  // permission was granted before _startOrientTracking() is called.
-  attach();
+  // De-duplicate: prefer 'deviceorientationabsolute' (Chrome/Android, true north).
+  // Fall back to 'deviceorientation' (iOS Safari, which provides webkitCompassHeading).
+  // Registering both can cause double-firing with conflicting headings on some devices.
+  let gotAbsolute = false;
+  _orientHdlr    = e => { gotAbsolute = true; onHeading(e); };
+  _orientRelHdlr = e => { if (!gotAbsolute) onHeading(e); };
+  window.addEventListener('deviceorientationabsolute', _orientHdlr);
+  window.addEventListener('deviceorientation',         _orientRelHdlr);
 }
 
 function _stopOrientTracking() {
   if (!_orientHdlr) return;
   window.removeEventListener('deviceorientationabsolute', _orientHdlr);
-  window.removeEventListener('deviceorientation', _orientHdlr);
-  _orientHdlr  = null;
-  _deviceHead  = null;
+  window.removeEventListener('deviceorientation',         _orientRelHdlr);
+  _orientHdlr    = null;
+  _orientRelHdlr = null;
+  _deviceHead    = null;
 }
 
 function _stopTracking() {
@@ -1180,11 +1182,11 @@ function _stopTracking() {
   _stopOrientTracking();
   if (_locMarker)   { map.removeLayer(_locMarker);   _locMarker   = null; }
   if (_locAccuracy) { map.removeLayer(_locAccuracy); _locAccuracy = null; }
+  _2dArrowEl     = null;
   _remove3DLocMarker();
   _lastPos       = null;
   _trackingOn    = false;
   _firstFix      = true;
-  _lastIconAngle = null;
   btnLocate.classList.remove('active');
   btnLocate.style.opacity = '';
 }
@@ -1372,14 +1374,8 @@ function setMapBearing(deg) {
   mapEl.style.transform = `translate(-50%, -50%) rotate(${state.bearing}deg)`;
   compassIcon.style.transform = `rotate(${state.bearing}deg)`;
   btnCompass.classList.toggle('active', state.bearing !== 0);
-  // Re-sync the location arrow when the user two-finger rotates the 2D map
-  if (_locMarker && _deviceHead !== null) {
-    const ang = ((_deviceHead - state.bearing) % 360 + 360) % 360;
-    if (_lastIconAngle === null || Math.abs(ang - _lastIconAngle) >= 2) {
-      _lastIconAngle = ang;
-      _locMarker.setIcon(locationIcon(_deviceHead));
-    }
-  }
+  // Re-sync the direction arrow when the user two-finger rotates the 2D map
+  _update2DArrow();
 }
 
 btnCompass.addEventListener('click', () => setMapBearing(0));
