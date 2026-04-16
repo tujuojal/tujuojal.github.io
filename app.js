@@ -1012,8 +1012,8 @@ const _3D_DOT   = 'pows-loc-dot';
 const _3D_ARROW = 'pows-loc-arrow';
 const _3D_IMG   = 'pows-arrow-img';
 
-/** Draw a canvas arrow image for the 3D direction indicator.
- *  Using a canvas avoids the MapLibre 'glyphs' URL requirement for text symbols. */
+/** Draw an upward-pointing arrow and return it as ImageData for map3d.addImage().
+ *  HTMLCanvasElement is NOT accepted by MapLibre addImage; ImageData is. */
 function _makeArrowImage() {
   const size = 28;
   const canvas = document.createElement('canvas');
@@ -1022,10 +1022,10 @@ function _makeArrowImage() {
   const ctx = canvas.getContext('2d');
   const cx  = size / 2;
   ctx.beginPath();
-  ctx.moveTo(cx,     2);            // tip
-  ctx.lineTo(cx - 6, size - 3);    // bottom-left
-  ctx.lineTo(cx,     size - 9);    // indent
-  ctx.lineTo(cx + 6, size - 3);    // bottom-right
+  ctx.moveTo(cx,     2);
+  ctx.lineTo(cx - 6, size - 3);
+  ctx.lineTo(cx,     size - 9);
+  ctx.lineTo(cx + 6, size - 3);
   ctx.closePath();
   ctx.fillStyle   = '#4fc3f7';
   ctx.strokeStyle = 'white';
@@ -1033,7 +1033,7 @@ function _makeArrowImage() {
   ctx.lineJoin    = 'round';
   ctx.fill();
   ctx.stroke();
-  return canvas;
+  return ctx.getImageData(0, 0, size, size);
 }
 
 /** Add source + layers to map3d the first time (called lazily). */
