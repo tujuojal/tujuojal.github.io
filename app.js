@@ -1010,6 +1010,31 @@ const _3D_SRC   = 'pows-loc';
 const _3D_RING  = 'pows-loc-ring';
 const _3D_DOT   = 'pows-loc-dot';
 const _3D_ARROW = 'pows-loc-arrow';
+const _3D_IMG   = 'pows-arrow-img';
+
+/** Draw a canvas arrow image for the 3D direction indicator.
+ *  Using a canvas avoids the MapLibre 'glyphs' URL requirement for text symbols. */
+function _makeArrowImage() {
+  const size = 28;
+  const canvas = document.createElement('canvas');
+  canvas.width  = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const cx  = size / 2;
+  ctx.beginPath();
+  ctx.moveTo(cx,     2);            // tip
+  ctx.lineTo(cx - 6, size - 3);    // bottom-left
+  ctx.lineTo(cx,     size - 9);    // indent
+  ctx.lineTo(cx + 6, size - 3);    // bottom-right
+  ctx.closePath();
+  ctx.fillStyle   = '#4fc3f7';
+  ctx.strokeStyle = 'white';
+  ctx.lineWidth   = 1.5;
+  ctx.lineJoin    = 'round';
+  ctx.fill();
+  ctx.stroke();
+  return canvas;
+}
 
 /** Add source + layers to map3d the first time (called lazily). */
 function _setup3DLocLayers() {
@@ -1046,23 +1071,19 @@ function _setup3DLocLayers() {
     },
   });
 
-  // Direction arrow (always screen-up = device heading, since bearing = heading)
+  // Direction arrow – canvas image avoids requiring a glyphs URL in the style.
+  if (!map3d.hasImage(_3D_IMG)) map3d.addImage(_3D_IMG, _makeArrowImage());
   map3d.addLayer({
     id: _3D_ARROW, type: 'symbol', source: _3D_SRC,
     layout: {
-      'text-field': '▲',
-      'text-size': 20,
-      'text-offset': [0, -2.2],
-      'text-rotation-alignment': 'viewport',
-      'text-pitch-alignment': 'viewport',
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
+      'icon-image': _3D_IMG,
+      'icon-size': 1,
+      'icon-offset': [0, -26],
+      'icon-rotation-alignment': 'viewport',
+      'icon-pitch-alignment': 'viewport',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
       'visibility': 'none',  // shown once heading arrives
-    },
-    paint: {
-      'text-color': '#4fc3f7',
-      'text-halo-color': 'white',
-      'text-halo-width': 2,
     },
   });
 
@@ -1088,7 +1109,7 @@ function _update3DLocMarker() {
   if (_deviceHead !== null && map3d.getLayer(_3D_ARROW)) {
     const rot = ((_deviceHead - map3d.getBearing()) % 360 + 360) % 360;
     map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
-    map3d.setLayoutProperty(_3D_ARROW, 'text-rotate', rot);
+    map3d.setLayoutProperty(_3D_ARROW, 'icon-rotate', rot);
   }
 }
 
@@ -1150,7 +1171,7 @@ function _startOrientTracking() {
       if (_3dLocActive && map3d.getLayer(_3D_ARROW)) {
         const rot = ((h - map3d.getBearing()) % 360 + 360) % 360;
         map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
-        map3d.setLayoutProperty(_3D_ARROW, 'text-rotate', rot);
+        map3d.setLayoutProperty(_3D_ARROW, 'icon-rotate', rot);
       }
     } else {
       // ── 2D mode ───────────────────────────────────────────────────
@@ -1503,7 +1524,7 @@ function init3D() {
     map3d.on('rotate', () => {
       if (_3dLocActive && _deviceHead !== null && map3d.getLayer(_3D_ARROW)) {
         const rot = ((_deviceHead - map3d.getBearing()) % 360 + 360) % 360;
-        map3d.setLayoutProperty(_3D_ARROW, 'text-rotate', rot);
+        map3d.setLayoutProperty(_3D_ARROW, 'icon-rotate', rot);
       }
     });
   });
@@ -1531,11 +1552,8 @@ btn3d.addEventListener('click', () => {
       map3d.setZoom(z);
       map3d.resize();                  // repeat visits: re-measure container
       if (state.shadowActive) updateShadow();  // apply 3D sun lighting
-      // Restore location marker + heading in 3D
-      if (_trackingOn && _lastPos) {
-        _update3DLocMarker();
-        if (_deviceHead !== null) map3d.jumpTo({ bearing: _deviceHead });
-      }
+      // Restore location marker in 3D (arrow rotation handled by next orientation event)
+      if (_trackingOn && _lastPos) _update3DLocMarker();
     });
   } else {
     // Switch 3D → 2D; sync position back to Leaflet
