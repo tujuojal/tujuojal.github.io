@@ -1012,10 +1012,7 @@ const _3D_DOT   = 'pows-loc-dot';
 const _3D_ARROW = 'pows-loc-arrow';
 const _3D_IMG   = 'pows-arrow-img';
 
-/** Returns a PNG data URL for an upward-pointing cone used as the 3D direction arrow.
- *  Using canvas.toDataURL + map3d.loadImage() is the only API that reliably
- *  registers a custom image in MapLibre GL JS 4.x (addImage(ImageData) can
- *  silently fail on some runtimes). */
+/** Returns a PNG data URL for an upward-pointing cone used as the 3D direction arrow. */
 function _makeArrowDataURL() {
   const w = 36, h = 48;
   const canvas = document.createElement('canvas');
@@ -1100,12 +1097,14 @@ function _setup3DLocLayers() {
   }
 
   if (map3d.hasImage(_3D_IMG)) {
-    // Image still registered from a previous visit – add layer synchronously
     _addArrowLayer();
   } else {
-    map3d.loadImage(_makeArrowDataURL())
-      .then(({ data }) => { map3d.addImage(_3D_IMG, data); _addArrowLayer(); })
-      .catch(() => {});  // arrow silently absent on error; dot still works
+    const img = new Image(36, 48);
+    img.onload = () => {
+      try { if (!map3d.hasImage(_3D_IMG)) map3d.addImage(_3D_IMG, img); } catch (e) {}
+      _addArrowLayer();
+    };
+    img.src = _makeArrowDataURL();
   }
 }
 
