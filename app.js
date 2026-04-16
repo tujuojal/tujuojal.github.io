@@ -1012,31 +1012,34 @@ const _3D_DOT   = 'pows-loc-dot';
 const _3D_ARROW = 'pows-loc-arrow';
 const _3D_IMG   = 'pows-arrow-img';
 
-/** Draw an upward-pointing arrow and return it as ImageData for map3d.addImage().
- *  HTMLCanvasElement is NOT accepted by MapLibre addImage; ImageData is. */
-function _makeArrowImage() {
-  const size = 28;
+/** Returns a PNG data URL for an upward-pointing cone used as the 3D direction arrow.
+ *  Using canvas.toDataURL + map3d.loadImage() is the only API that reliably
+ *  registers a custom image in MapLibre GL JS 4.x (addImage(ImageData) can
+ *  silently fail on some runtimes). */
+function _makeArrowDataURL() {
+  const w = 36, h = 48;
   const canvas = document.createElement('canvas');
-  canvas.width  = size;
-  canvas.height = size;
+  canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
-  const cx  = size / 2;
   ctx.beginPath();
-  ctx.moveTo(cx,     2);
-  ctx.lineTo(cx - 6, size - 3);
-  ctx.lineTo(cx,     size - 9);
-  ctx.lineTo(cx + 6, size - 3);
+  ctx.moveTo(w / 2, 2);          // tip
+  ctx.lineTo(w - 2, h - 2);      // bottom-right
+  ctx.lineTo(w / 2, h - 10);     // indent
+  ctx.lineTo(2, h - 2);          // bottom-left
   ctx.closePath();
-  ctx.fillStyle   = '#4fc3f7';
-  ctx.strokeStyle = 'white';
-  ctx.lineWidth   = 1.5;
-  ctx.lineJoin    = 'round';
+  ctx.fillStyle = '#4fc3f7';
   ctx.fill();
+  ctx.strokeStyle = 'white';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
   ctx.stroke();
-  return ctx.getImageData(0, 0, size, size);
+  return canvas.toDataURL('image/png');
 }
 
-/** Add source + layers to map3d the first time (called lazily). */
+/** Add source + layers to map3d the first time (called lazily).
+ *  Circle layers (dot + ring) are added synchronously so the dot appears
+ *  immediately.  The direction-cone symbol layer is added once the PNG
+ *  image finishes loading (effectively instant for a data URL). */
 function _setup3DLocLayers() {
   if (!map3d || _3dLocActive) return;
   if (!map3d.isStyleLoaded()) return;  // defer until map 'load' fires
@@ -1071,23 +1074,39 @@ function _setup3DLocLayers() {
     },
   });
 
-  // Direction arrow – canvas image avoids requiring a glyphs URL in the style.
-  if (!map3d.hasImage(_3D_IMG)) map3d.addImage(_3D_IMG, _makeArrowImage());
-  map3d.addLayer({
-    id: _3D_ARROW, type: 'symbol', source: _3D_SRC,
-    layout: {
-      'icon-image': _3D_IMG,
-      'icon-size': 1,
-      'icon-offset': [0, -26],
-      'icon-rotation-alignment': 'viewport',
-      'icon-pitch-alignment': 'viewport',
-      'icon-allow-overlap': true,
-      'icon-ignore-placement': true,
-      'visibility': 'none',  // shown once heading arrives
-    },
-  });
-
+  // Dot is ready; arrow layer follows once the image loads
   _3dLocActive = true;
+
+  function _addArrowLayer() {
+    if (!map3d || !map3d.getSource(_3D_SRC) || map3d.getLayer(_3D_ARROW)) return;
+    map3d.addLayer({
+      id: _3D_ARROW, type: 'symbol', source: _3D_SRC,
+      layout: {
+        'icon-image':               _3D_IMG,
+        'icon-size':                0.8,
+        'icon-offset':              [0, -28],
+        'icon-rotation-alignment':  'viewport',
+        'icon-pitch-alignment':     'viewport',
+        'icon-allow-overlap':       true,
+        'icon-ignore-placement':    true,
+        'visibility':               'none',
+      },
+    });
+    if (_deviceHead !== null) {
+      const rot = ((_deviceHead - map3d.getBearing()) % 360 + 360) % 360;
+      map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
+      map3d.setLayoutProperty(_3D_ARROW, 'icon-rotate', rot);
+    }
+  }
+
+  if (map3d.hasImage(_3D_IMG)) {
+    // Image still registered from a previous visit – add layer synchronously
+    _addArrowLayer();
+  } else {
+    map3d.loadImage(_makeArrowDataURL())
+      .then(({ data }) => { map3d.addImage(_3D_IMG, data); _addArrowLayer(); })
+      .catch(() => {});  // arrow silently absent on error; dot still works
+  }
 }
 
 /** Move the 3D dot to the current GPS position. */
@@ -1103,14 +1122,8 @@ function _update3DLocMarker() {
     geometry: { type: 'Point', coordinates: [_lastPos.lng, _lastPos.lat] },
     properties: {},
   });
-
-  // Initialize the 3D arrow immediately if heading is already known.
-  // This covers the case where orientation events fired before layers were ready.
-  if (_deviceHead !== null && map3d.getLayer(_3D_ARROW)) {
-    const rot = ((_deviceHead - map3d.getBearing()) % 360 + 360) % 360;
-    map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
-    map3d.setLayoutProperty(_3D_ARROW, 'icon-rotate', rot);
-  }
+  // Arrow init is handled inside _setup3DLocLayers → _addArrowLayer(),
+  // and on every orientation event in the handler below.
 }
 
 /** Remove 3D layers and source when leaving 3D view. */
