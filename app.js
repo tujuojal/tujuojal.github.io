@@ -150,6 +150,12 @@ function setBasemap(key) {
   state.basemap = key;
   layers[key].addTo(map);
   layers[key].bringToBack();
+
+  // Sync the 3D map's basemap tile source if it's already initialised
+  if (map3d && map3d.isStyleLoaded()) {
+    const src3d = map3d.getSource('basemap');
+    if (src3d) src3d.setTiles(build3DStyle().sources.basemap.tiles);
+  }
 }
 
 /* ─── WGS84 → ETRS-TM35FIN (EPSG:3067) projection ───────────────────── */
@@ -994,6 +1000,8 @@ function _update2DArrow() {
 let _locMarker    = null;   // L.marker for the dot + arrow  (2D)
 let _locAccuracy  = null;   // L.circle for accuracy ring    (2D)
 let _2dArrowEl    = null;   // direct ref to the arrow <g> inside the 2D SVG
+let _3dArrowMarker = null;  // maplibregl.Marker for the 3D direction arrow
+let _3dArrowEl    = null;   // arrow div element (for CSS rotation)
 let _3dLocActive  = false;  // true when 3D GeoJSON layers are added to map3d
 let _lastPos      = null;   // { lat, lng } – last GPS fix, used when switching views
 let _watchId        = null;   // geolocation watchPosition id
@@ -1003,40 +1011,15 @@ let _deviceHead   = null;   // current compass heading (degrees, or null)
 let _trackingOn   = false;
 let _firstFix     = true;
 
-/* ─── 3D location indicator (GeoJSON + WebGL circle/symbol layers) ──── */
-// Using WebGL layers instead of HTML maplibregl.Marker avoids terrain
-// occlusion — HTML markers get buried under terrain with exaggeration=1.5.
+/* ─── 3D location indicator (GeoJSON circle layers + HTML Marker arrow) ─ */
+// Dot/ring use WebGL circle layers (avoids terrain occlusion).
+// Arrow uses a maplibregl.Marker with a custom SVG element (avoids addImage
+// reliability issues in MapLibre 4.x) and is rotated via CSS transform.
 const _3D_SRC   = 'pows-loc';
 const _3D_RING  = 'pows-loc-ring';
 const _3D_DOT   = 'pows-loc-dot';
-const _3D_ARROW = 'pows-loc-arrow';
-const _3D_IMG   = 'pows-arrow-img';
 
-/** Returns a PNG data URL for an upward-pointing cone used as the 3D direction arrow. */
-function _makeArrowDataURL() {
-  const w = 36, h = 48;
-  const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  ctx.beginPath();
-  ctx.moveTo(w / 2, 2);          // tip
-  ctx.lineTo(w - 2, h - 2);      // bottom-right
-  ctx.lineTo(w / 2, h - 10);     // indent
-  ctx.lineTo(2, h - 2);          // bottom-left
-  ctx.closePath();
-  ctx.fillStyle = '#4fc3f7';
-  ctx.fill();
-  ctx.strokeStyle = 'white';
-  ctx.lineWidth = 2;
-  ctx.lineJoin = 'round';
-  ctx.stroke();
-  return canvas.toDataURL('image/png');
-}
-
-/** Add source + layers to map3d the first time (called lazily).
- *  Circle layers (dot + ring) are added synchronously so the dot appears
- *  immediately.  The direction-cone symbol layer is added once the PNG
- *  image finishes loading (effectively instant for a data URL). */
+/** Add GeoJSON source + circle layers and direction-arrow Marker to map3d. */
 function _setup3DLocLayers() {
   if (!map3d || _3dLocActive) return;
   if (!map3d.isStyleLoaded()) return;  // defer until map 'load' fires
@@ -1071,40 +1054,25 @@ function _setup3DLocLayers() {
     },
   });
 
-  // Dot is ready; arrow layer follows once the image loads
   _3dLocActive = true;
 
-  function _addArrowLayer() {
-    if (!map3d || !map3d.getSource(_3D_SRC) || map3d.getLayer(_3D_ARROW)) return;
-    map3d.addLayer({
-      id: _3D_ARROW, type: 'symbol', source: _3D_SRC,
-      layout: {
-        'icon-image':               _3D_IMG,
-        'icon-size':                0.8,
-        'icon-offset':              [0, -28],
-        'icon-rotation-alignment':  'viewport',
-        'icon-pitch-alignment':     'viewport',
-        'icon-allow-overlap':       true,
-        'icon-ignore-placement':    true,
-        'visibility':               'none',
-      },
-    });
+  // Direction arrow: HTML Marker with inline SVG, rotated via CSS transform.
+  // This avoids all addImage/loadImage reliability issues in MapLibre 4.x.
+  if (!_3dArrowMarker) {
+    const el = document.createElement('div');
+    el.style.cssText = 'pointer-events:none;opacity:0;transform-origin:center center;';
+    el.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="-16 -16 32 32">' +
+      '<path d="M0,-13 L-7,9 L0,4 L7,9 Z" fill="#4fc3f7" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>' +
+      '</svg>';
+    _3dArrowEl = el;
+    _3dArrowMarker = new maplibregl.Marker({ element: el, anchor: 'center', pitchAlignment: 'viewport', rotationAlignment: 'viewport' })
+      .setLngLat([_lastPos.lng, _lastPos.lat])
+      .addTo(map3d);
     if (_deviceHead !== null) {
       const rot = ((_deviceHead - map3d.getBearing()) % 360 + 360) % 360;
-      map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
-      map3d.setLayoutProperty(_3D_ARROW, 'icon-rotate', rot);
+      el.style.opacity = '1';
+      el.style.transform = `rotate(${rot.toFixed(1)}deg)`;
     }
-  }
-
-  if (map3d.hasImage(_3D_IMG)) {
-    _addArrowLayer();
-  } else {
-    const img = new Image(36, 48);
-    img.onload = () => {
-      try { if (!map3d.hasImage(_3D_IMG)) map3d.addImage(_3D_IMG, img); } catch (e) {}
-      _addArrowLayer();
-    };
-    img.src = _makeArrowDataURL();
   }
 }
 
@@ -1121,14 +1089,15 @@ function _update3DLocMarker() {
     geometry: { type: 'Point', coordinates: [_lastPos.lng, _lastPos.lat] },
     properties: {},
   });
-  // Arrow init is handled inside _setup3DLocLayers → _addArrowLayer(),
-  // and on every orientation event in the handler below.
+  if (_3dArrowMarker) _3dArrowMarker.setLngLat([_lastPos.lng, _lastPos.lat]);
 }
 
 /** Remove 3D layers and source when leaving 3D view. */
 function _remove3DLocMarker() {
   if (!map3d || !_3dLocActive) return;
-  [_3D_ARROW, _3D_DOT, _3D_RING].forEach(id => {
+  if (_3dArrowMarker) { _3dArrowMarker.remove(); _3dArrowMarker = null; }
+  _3dArrowEl = null;
+  [_3D_DOT, _3D_RING].forEach(id => {
     if (map3d.getLayer(id)) map3d.removeLayer(id);
   });
   if (map3d.getSource(_3D_SRC)) map3d.removeSource(_3D_SRC);
@@ -1179,11 +1148,10 @@ function _startOrientTracking() {
 
     if (map3d && !map3dEl.classList.contains('hidden')) {
       // ── 3D mode ───────────────────────────────────────────────────
-      // Only rotate the arrow; map bearing is left to finger gestures.
-      if (_3dLocActive && map3d.getLayer(_3D_ARROW)) {
+      if (_3dLocActive && _3dArrowEl) {
         const rot = ((h - map3d.getBearing()) % 360 + 360) % 360;
-        map3d.setLayoutProperty(_3D_ARROW, 'visibility', 'visible');
-        map3d.setLayoutProperty(_3D_ARROW, 'icon-rotate', rot);
+        _3dArrowEl.style.opacity = '1';
+        _3dArrowEl.style.transform = `rotate(${rot.toFixed(1)}deg)`;
       }
     } else {
       // ── 2D mode ───────────────────────────────────────────────────
@@ -1534,9 +1502,9 @@ function init3D() {
     if (_trackingOn && _lastPos) _update3DLocMarker();
     // Keep the direction arrow aligned when user two-finger rotates the 3D map
     map3d.on('rotate', () => {
-      if (_3dLocActive && _deviceHead !== null && map3d.getLayer(_3D_ARROW)) {
+      if (_3dArrowEl && _deviceHead !== null) {
         const rot = ((_deviceHead - map3d.getBearing()) % 360 + 360) % 360;
-        map3d.setLayoutProperty(_3D_ARROW, 'icon-rotate', rot);
+        _3dArrowEl.style.transform = `rotate(${rot.toFixed(1)}deg)`;
       }
     });
   });
