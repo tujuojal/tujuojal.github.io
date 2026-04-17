@@ -151,10 +151,16 @@ function setBasemap(key) {
   layers[key].addTo(map);
   layers[key].bringToBack();
 
-  // Sync the 3D map's basemap tile source if it's already initialised
-  if (map3d && map3d.isStyleLoaded()) {
-    const src3d = map3d.getSource('basemap');
-    if (src3d) src3d.setTiles(build3DStyle().sources.basemap.tiles);
+  // Sync the 3D map when it's already initialised
+  if (map3d) {
+    // Remove location layers before the style swap (they'll be re-added after load)
+    if (_3dLocActive) _remove3DLocMarker();
+    map3d.setStyle(build3DStyle());
+    map3d.once('load', () => {
+      terrain3d = true;
+      map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
+      if (_trackingOn && _lastPos) _update3DLocMarker();
+    });
   }
 }
 
@@ -1495,8 +1501,8 @@ function init3D() {
   map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-left');
   map3d.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
-  // Enable terrain elevation once the style has loaded
-  map3d.on('load', () => {
+  // Enable terrain and register rotate listener once on initial style load
+  map3d.once('load', () => {
     map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
     terrain3d = true;
     if (_trackingOn && _lastPos) _update3DLocMarker();
