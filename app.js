@@ -151,16 +151,29 @@ function setBasemap(key) {
   layers[key].addTo(map);
   layers[key].bringToBack();
 
-  // Sync the 3D map when it's already initialised
+  // Sync the 3D map when it's already initialised — destroy and recreate
+  // so there's no risk of a broken style-swap state.
   if (map3d) {
-    // Remove location layers before the style swap (they'll be re-added after load)
     if (_3dLocActive) _remove3DLocMarker();
-    map3d.setStyle(build3DStyle());
-    map3d.once('load', () => {
-      terrain3d = true;
-      map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
-      if (_trackingOn && _lastPos) _update3DLocMarker();
-    });
+    const wasIn3D  = !map3dEl.classList.contains('hidden');
+    const center3d = wasIn3D ? map3d.getCenter()  : null;
+    const zoom3d   = wasIn3D ? map3d.getZoom()    : null;
+    const pitch3d  = wasIn3D ? map3d.getPitch()   : null;
+    const bear3d   = wasIn3D ? map3d.getBearing() : null;
+    map3d.remove();
+    map3d = null;
+    terrain3d = false;
+    if (wasIn3D) {
+      requestAnimationFrame(() => {
+        init3D();
+        map3d.setCenter([center3d.lng, center3d.lat]);
+        map3d.setZoom(zoom3d);
+        map3d.setPitch(pitch3d);
+        map3d.setBearing(bear3d);
+        map3d.resize();
+        if (_trackingOn && _lastPos) _update3DLocMarker();
+      });
+    }
   }
 }
 
@@ -1415,61 +1428,6 @@ function setMapBearing(deg) {
 }
 
 btnCompass.addEventListener('click', () => setMapBearing(0));
-
-// Two-finger rotation gesture on the 2D map
-// Uses gesture-recognition: stay in "undecided" mode (Leaflet zoom works normally)
-// until cumulative angle change exceeds ROTATION_ACTIVATE, then commit to rotation.
-let _touchGesture = null; // { startAngle, prevAngle, mode: 'undecided'|'rotating' }
-const ROTATION_ACTIVATE = 12; // degrees of cumulative angle change before rotation locks in
-
-function _touchAngle(touches) {
-  const dx = touches[1].clientX - touches[0].clientX;
-  const dy = touches[1].clientY - touches[0].clientY;
-  return Math.atan2(dy, dx) * (180 / Math.PI);
-}
-
-function _normDeg(d) {
-  if (d >  180) d -= 360;
-  if (d < -180) d += 360;
-  return d;
-}
-
-mapEl.addEventListener('touchstart', e => {
-  if (e.touches.length === 2) {
-    const a = _touchAngle(e.touches);
-    _touchGesture = { startAngle: a, prevAngle: a, mode: 'undecided' };
-  } else {
-    _endTouchGesture();
-  }
-}, { passive: true });
-
-mapEl.addEventListener('touchmove', e => {
-  if (e.touches.length !== 2 || !_touchGesture) return;
-  const angle = _touchAngle(e.touches);
-  const g = _touchGesture;
-
-  if (g.mode === 'undecided') {
-    // Wait until cumulative rotation clearly exceeds threshold before committing
-    if (Math.abs(_normDeg(angle - g.startAngle)) >= ROTATION_ACTIVATE) {
-      g.mode = 'rotating';
-      g.prevAngle = angle;    // reset incremental base so there's no snap
-      map.touchZoom.disable(); // hand off gesture from Leaflet to us
-    }
-    return; // Leaflet handles zoom while undecided
-  }
-
-  // Rotation mode: incremental update each frame
-  const delta = _normDeg(angle - g.prevAngle);
-  g.prevAngle = angle;
-  setMapBearing(state.bearing + delta * 0.75);
-}, { passive: true });
-
-function _endTouchGesture() {
-  if (_touchGesture?.mode === 'rotating') map.touchZoom.enable();
-  _touchGesture = null;
-}
-mapEl.addEventListener('touchend',    e => { if (e.touches.length < 2) _endTouchGesture(); }, { passive: true });
-mapEl.addEventListener('touchcancel', _endTouchGesture, { passive: true });
 
 /* ─── 3D terrain view (MapLibre GL JS) ──────────────────────────────── */
 
