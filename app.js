@@ -151,10 +151,16 @@ function setBasemap(key) {
   layers[key].addTo(map);
   layers[key].bringToBack();
 
-  // Sync the 3D map's basemap tile source if it's already initialised
-  if (map3d && map3d.isStyleLoaded()) {
-    const src3d = map3d.getSource('basemap');
-    if (src3d) src3d.setTiles(build3DStyle().sources.basemap.tiles);
+  // Sync the 3D map when it's already initialised
+  if (map3d) {
+    // Remove location layers before the style swap (they'll be re-added after load)
+    if (_3dLocActive) _remove3DLocMarker();
+    map3d.setStyle(build3DStyle());
+    map3d.once('load', () => {
+      terrain3d = true;
+      map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
+      if (_trackingOn && _lastPos) _update3DLocMarker();
+    });
   }
 }
 
@@ -894,11 +900,12 @@ btnSaveKey.addEventListener('click', () => applyApiKey(apiKeyInput.value));
 apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyApiKey(apiKeyInput.value); });
 
 // Shadow overlay
-const btnShadow     = document.getElementById('btn-shadow');
-const shadowBarEl   = document.getElementById('shadow-bar');
-const shadowDateEl  = document.getElementById('shadow-date');
-const shadowTimeEl  = document.getElementById('shadow-time');
-const shadowLabelEl = document.getElementById('shadow-time-label');
+const btnShadow      = document.getElementById('btn-shadow');
+const shadowBarEl    = document.getElementById('shadow-bar');
+const shadowDateEl   = document.getElementById('shadow-date');
+const shadowTimelineEl = document.getElementById('shadow-timeline');
+const shadowThumbEl  = document.getElementById('shadow-tl-thumb');
+const shadowBubbleEl = document.getElementById('shadow-time-label');
 
 function _fmtTime(totalMin) {
   return String(Math.floor(totalMin / 60)).padStart(2, '0') + ':' +
@@ -911,30 +918,36 @@ function _toDateInputVal(date) {
          String(date.getDate()).padStart(2, '0');
 }
 
+let _shadowMinutes = 720;
+let _shadowTimer   = null;
+
+function _setShadowMinutes(mins) {
+  _shadowMinutes = Math.max(0, Math.min(1439, mins));
+  shadowThumbEl.style.left = (_shadowMinutes / 1439 * 100) + '%';
+  shadowBubbleEl.textContent = _fmtTime(_shadowMinutes);
+  shadowTimelineEl.setAttribute('aria-valuenow', _shadowMinutes);
+  clearTimeout(_shadowTimer);
+  _shadowTimer = setTimeout(_applyShadowDateTime, 80);
+}
+
 function _applyShadowDateTime() {
-  const mins  = parseInt(shadowTimeEl.value, 10);
   const parts = shadowDateEl.value.split('-').map(Number);
   if (parts.length === 3 && !parts.some(isNaN)) {
     state.shadowDate = new Date(parts[0], parts[1] - 1, parts[2],
-                                Math.floor(mins / 60), mins % 60, 0, 0);
+                                Math.floor(_shadowMinutes / 60), _shadowMinutes % 60, 0, 0);
   }
   updateShadow();
 }
-
-let _shadowTimer = null;
 
 btnShadow.addEventListener('click', () => {
   state.shadowActive = !state.shadowActive;
   btnShadow.classList.toggle('active', state.shadowActive);
 
   if (state.shadowActive) {
-    // Initialise bar to current local time
     const now = new Date();
-    state.shadowDate       = now;
-    shadowDateEl.value     = _toDateInputVal(now);
-    const nowMin           = now.getHours() * 60 + now.getMinutes();
-    shadowTimeEl.value     = nowMin;
-    shadowLabelEl.textContent = _fmtTime(nowMin);
+    state.shadowDate   = now;
+    shadowDateEl.value = _toDateInputVal(now);
+    _setShadowMinutes(now.getHours() * 60 + now.getMinutes());
     shadowBarEl.classList.remove('hidden');
     updateShadow();
     if (map3dEl.classList.contains('hidden')) shadowLayer.addTo(map);
@@ -944,11 +957,34 @@ btnShadow.addEventListener('click', () => {
   }
 });
 
-// Update label immediately while dragging, debounce the expensive redraw
-shadowTimeEl.addEventListener('input', () => {
-  shadowLabelEl.textContent = _fmtTime(parseInt(shadowTimeEl.value, 10));
-  clearTimeout(_shadowTimer);
-  _shadowTimer = setTimeout(_applyShadowDateTime, 100);
+// Timeline drag interaction (pointer events work for both mouse and touch)
+function _timelineToMins(clientX) {
+  const rect = shadowTimelineEl.getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  return Math.round(frac * 1439 / 15) * 15;
+}
+
+let _tlDragging = false;
+shadowTimelineEl.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  shadowTimelineEl.setPointerCapture(e.pointerId);
+  _tlDragging = true;
+  _setShadowMinutes(_timelineToMins(e.clientX));
+});
+shadowTimelineEl.addEventListener('pointermove', e => {
+  if (!_tlDragging) return;
+  _setShadowMinutes(_timelineToMins(e.clientX));
+});
+shadowTimelineEl.addEventListener('pointerup',     () => { _tlDragging = false; });
+shadowTimelineEl.addEventListener('pointercancel', () => { _tlDragging = false; });
+
+// Keyboard: arrows ±15 min, Page keys ±1 h
+shadowTimelineEl.addEventListener('keydown', e => {
+  const step = { ArrowLeft: -15, ArrowDown: -15, ArrowRight: 15, ArrowUp: 15,
+                 PageDown: -60, PageUp: 60, Home: -1439, End: 1439 }[e.key];
+  if (step === undefined) return;
+  e.preventDefault();
+  _setShadowMinutes(e.key === 'Home' ? 0 : e.key === 'End' ? 1439 : _shadowMinutes + step);
 });
 
 shadowDateEl.addEventListener('change', _applyShadowDateTime);
@@ -1495,8 +1531,8 @@ function init3D() {
   map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-left');
   map3d.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
-  // Enable terrain elevation once the style has loaded
-  map3d.on('load', () => {
+  // Enable terrain and register rotate listener once on initial style load
+  map3d.once('load', () => {
     map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
     terrain3d = true;
     if (_trackingOn && _lastPos) _update3DLocMarker();

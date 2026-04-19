@@ -70,12 +70,23 @@
 
     <!-- Sun shadow time bar (slides down below topbar when active) -->
     <div id="shadow-bar" class="hidden" aria-label="Sun shadow time controls">
-      <div class="shadow-inner">
-        <input type="date"  id="shadow-date"  class="shadow-date-input" aria-label="Shadow date">
-        <input type="range" id="shadow-time"  class="shadow-time-slider"
-               min="0" max="1439" value="720" step="15" aria-label="Time of day">
-        <span  id="shadow-time-label" class="shadow-time-label" aria-live="polite">12:00</span>
-        <span  id="shadow-alt" class="shadow-alt" title="Sun altitude above horizon"></span>
+      <div class="shadow-top">
+        <input type="date" id="shadow-date" class="shadow-date-input" aria-label="Shadow date">
+        <span id="shadow-alt" class="shadow-alt" title="Sun altitude above horizon"></span>
+      </div>
+      <div id="shadow-timeline" class="shadow-timeline"
+           role="slider" tabindex="0"
+           aria-valuemin="0" aria-valuemax="1439" aria-valuenow="720"
+           aria-label="Time of day">
+        <div class="shadow-tl-track">
+          <div id="shadow-tl-thumb" class="shadow-tl-thumb">
+            <span id="shadow-time-label" class="shadow-tl-bubble" aria-live="polite">12:00</span>
+          </div>
+        </div>
+        <div class="shadow-tl-marks" aria-hidden="true">
+          <span>0h</span><span>3h</span><span>6h</span><span>9h</span>
+          <span>12h</span><span>15h</span><span>18h</span><span>21h</span><span>24h</span>
+        </div>
       </div>
     </div>
 
