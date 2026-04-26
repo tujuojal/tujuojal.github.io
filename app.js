@@ -917,8 +917,29 @@ const btnShadow      = document.getElementById('btn-shadow');
 const shadowBarEl    = document.getElementById('shadow-bar');
 const shadowDateEl   = document.getElementById('shadow-date');
 const shadowTimelineEl = document.getElementById('shadow-timeline');
-const shadowThumbEl  = document.getElementById('shadow-tl-thumb');
+const shadowTrackEl  = document.getElementById('shadow-tl-track');
 const shadowBubbleEl = document.getElementById('shadow-time-label');
+
+// 2 px per minute → 1440 min × 2 = 2880 px wide track
+const SHADOW_SCALE = 2;
+const SHADOW_TRK_W = 1439 * SHADOW_SCALE;
+
+// Build tick marks inside the scrolling track
+(function _buildShadowTicks() {
+  shadowTrackEl.style.width = SHADOW_TRK_W + 'px';
+  for (let h = 0; h <= 24; h++) {
+    const isMajor = h % 3 === 0;
+    const tick = document.createElement('div');
+    tick.className = 'tl-tick' + (isMajor ? ' tl-tick-major' : '');
+    tick.style.left = Math.min(h * 60 * SHADOW_SCALE, SHADOW_TRK_W) + 'px';
+    if (isMajor) {
+      const lbl = document.createElement('span');
+      lbl.textContent = h + 'h';
+      tick.appendChild(lbl);
+    }
+    shadowTrackEl.appendChild(tick);
+  }
+})();
 
 function _fmtTime(totalMin) {
   return String(Math.floor(totalMin / 60)).padStart(2, '0') + ':' +
@@ -933,14 +954,29 @@ function _toDateInputVal(date) {
 
 let _shadowMinutes = 720;
 let _shadowTimer   = null;
+let _tlDragX       = null;  // clientX at drag start
+let _tlDragOffset  = null;  // track translateX at drag start
 
-function _setShadowMinutes(mins) {
-  _shadowMinutes = Math.max(0, Math.min(1439, mins));
-  shadowThumbEl.style.left = (_shadowMinutes / 1439 * 100) + '%';
+function _minsToOffset(mins) {
+  return shadowTimelineEl.clientWidth / 2 - mins * SHADOW_SCALE;
+}
+
+function _applyOffset(dx) {
+  const cw  = shadowTimelineEl.clientWidth;
+  const min = cw / 2 - SHADOW_TRK_W;  // max-left: 23:59 at centre
+  const max = cw / 2;                  // max-right: 00:00 at centre
+  dx = Math.max(min, Math.min(max, dx));
+  shadowTrackEl.style.transform = `translateX(${dx}px)`;
+  _shadowMinutes = Math.max(0, Math.min(1439,
+    Math.round((cw / 2 - dx) / SHADOW_SCALE)));
   shadowBubbleEl.textContent = _fmtTime(_shadowMinutes);
   shadowTimelineEl.setAttribute('aria-valuenow', _shadowMinutes);
   clearTimeout(_shadowTimer);
   _shadowTimer = setTimeout(_applyShadowDateTime, 80);
+}
+
+function _setShadowMinutes(mins) {
+  _applyOffset(_minsToOffset(Math.max(0, Math.min(1439, mins))));
 }
 
 function _applyShadowDateTime() {
@@ -960,8 +996,9 @@ btnShadow.addEventListener('click', () => {
     const now = new Date();
     state.shadowDate   = now;
     shadowDateEl.value = _toDateInputVal(now);
-    _setShadowMinutes(now.getHours() * 60 + now.getMinutes());
+    // Show bar first so clientWidth is valid for offset calculation
     shadowBarEl.classList.remove('hidden');
+    _setShadowMinutes(now.getHours() * 60 + now.getMinutes());
     updateShadow();
     if (map3dEl.classList.contains('hidden')) shadowLayer.addTo(map);
   } else {
@@ -970,28 +1007,22 @@ btnShadow.addEventListener('click', () => {
   }
 });
 
-// Timeline drag interaction (pointer events work for both mouse and touch)
-function _timelineToMins(clientX) {
-  const rect = shadowTimelineEl.getBoundingClientRect();
-  const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-  return Math.round(frac * 1439 / 15) * 15;
-}
-
-let _tlDragging = false;
+// Drag: the TRACK moves, the centre pointer stays fixed
 shadowTimelineEl.addEventListener('pointerdown', e => {
   e.preventDefault();
   shadowTimelineEl.setPointerCapture(e.pointerId);
-  _tlDragging = true;
-  _setShadowMinutes(_timelineToMins(e.clientX));
+  _tlDragX = e.clientX;
+  const m = shadowTrackEl.style.transform.match(/translateX\(([^p]+)px\)/);
+  _tlDragOffset = m ? parseFloat(m[1]) : _minsToOffset(_shadowMinutes);
 });
 shadowTimelineEl.addEventListener('pointermove', e => {
-  if (!_tlDragging) return;
-  _setShadowMinutes(_timelineToMins(e.clientX));
+  if (_tlDragX === null) return;
+  _applyOffset(_tlDragOffset + (e.clientX - _tlDragX));
 });
-shadowTimelineEl.addEventListener('pointerup',     () => { _tlDragging = false; });
-shadowTimelineEl.addEventListener('pointercancel', () => { _tlDragging = false; });
+shadowTimelineEl.addEventListener('pointerup',     () => { _tlDragX = null; });
+shadowTimelineEl.addEventListener('pointercancel', () => { _tlDragX = null; });
 
-// Keyboard: arrows ±15 min, Page keys ±1 h
+// Keyboard: arrows ±15 min, Page ±1 h, Home/End
 shadowTimelineEl.addEventListener('keydown', e => {
   const step = { ArrowLeft: -15, ArrowDown: -15, ArrowRight: 15, ArrowUp: 15,
                  PageDown: -60, PageUp: 60, Home: -1439, End: 1439 }[e.key];
