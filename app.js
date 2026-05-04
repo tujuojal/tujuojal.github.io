@@ -38,10 +38,8 @@ const NO_GRAY_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright"
 // Kartverket (Norway) – official Norwegian mapping authority
 // cache.kartverket.no v1 WMTS, CC BY 4.0.
 // Path uses WMTS TileRow/TileCol order: {z}/{y}/{x}.
-// Subdomains cache.kartverket.no, cache2.kartverket.no, cache3.kartverket.no.
-const KARTVERKET_BASE  = 'https://cache{s}.kartverket.no/v1/wmts/1.0.0';
+const KARTVERKET_BASE  = 'https://cache.kartverket.no/v1/wmts/1.0.0';
 const KARTVERKET_ATTRIB = '&copy; <a href="https://www.kartverket.no">Kartverket</a> CC BY 4.0';
-const KV_SUBDOMAINS = ['', '2', '3'];
 const KV_TOPO_URL = `${KARTVERKET_BASE}/topo/default/webmercator/{z}/{y}/{x}.png`;
 const KV_GRAY_URL = `${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{y}/{x}.png`;
 
@@ -106,12 +104,10 @@ const layers = {
     attribution: NO_GRAY_ATTRIB,
   }),
   'kv-topo':  L.tileLayer(KV_TOPO_URL, {
-    subdomains: KV_SUBDOMAINS,
     maxZoom: 18,
     attribution: KARTVERKET_ATTRIB,
   }),
   'kv-gray':  L.tileLayer(KV_GRAY_URL, {
-    subdomains: KV_SUBDOMAINS,
     maxZoom: 18,
     attribution: KARTVERKET_ATTRIB,
   }),
@@ -1440,6 +1436,9 @@ function init() {
   updateZoomHint();
 }
 
+const map3dEl = document.getElementById('map-3d');
+const btn3d   = document.getElementById('btn-3d');
+
 init();
 
 /* ─── 2D map rotation (bearing) ─────────────────────────────────────── */
@@ -1459,11 +1458,6 @@ function setMapBearing(deg) {
 }
 
 btnCompass.addEventListener('click', () => setMapBearing(0));
-
-/* ─── 3D terrain view (MapLibre GL JS) ──────────────────────────────── */
-
-const map3dEl = document.getElementById('map-3d');
-const btn3d   = document.getElementById('btn-3d');
 
 let map3d      = null;
 let terrain3d  = false;   // true once terrain source is loaded
