@@ -151,16 +151,29 @@ function setBasemap(key) {
   layers[key].addTo(map);
   layers[key].bringToBack();
 
-  // Sync the 3D map when it's already initialised
+  // Sync the 3D map when it's already initialised — destroy and recreate
+  // so there's no risk of a broken style-swap state.
   if (map3d) {
-    // Remove location layers before the style swap (they'll be re-added after load)
     if (_3dLocActive) _remove3DLocMarker();
-    map3d.setStyle(build3DStyle());
-    map3d.once('load', () => {
-      terrain3d = true;
-      map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
-      if (_trackingOn && _lastPos) _update3DLocMarker();
-    });
+    const wasIn3D  = !map3dEl.classList.contains('hidden');
+    const center3d = wasIn3D ? map3d.getCenter()  : null;
+    const zoom3d   = wasIn3D ? map3d.getZoom()    : null;
+    const pitch3d  = wasIn3D ? map3d.getPitch()   : null;
+    const bear3d   = wasIn3D ? map3d.getBearing() : null;
+    map3d.remove();
+    map3d = null;
+    terrain3d = false;
+    if (wasIn3D) {
+      requestAnimationFrame(() => {
+        init3D();
+        map3d.setCenter([center3d.lng, center3d.lat]);
+        map3d.setZoom(zoom3d);
+        map3d.setPitch(pitch3d);
+        map3d.setBearing(bear3d);
+        map3d.resize();
+        if (_trackingOn && _lastPos) _update3DLocMarker();
+      });
+    }
   }
 }
 
@@ -904,8 +917,29 @@ const btnShadow      = document.getElementById('btn-shadow');
 const shadowBarEl    = document.getElementById('shadow-bar');
 const shadowDateEl   = document.getElementById('shadow-date');
 const shadowTimelineEl = document.getElementById('shadow-timeline');
-const shadowThumbEl  = document.getElementById('shadow-tl-thumb');
+const shadowTrackEl  = document.getElementById('shadow-tl-track');
 const shadowBubbleEl = document.getElementById('shadow-time-label');
+
+// 2 px per minute → 1440 min × 2 = 2880 px wide track
+const SHADOW_SCALE = 2;
+const SHADOW_TRK_W = 1439 * SHADOW_SCALE;
+
+// Build tick marks inside the scrolling track
+(function _buildShadowTicks() {
+  shadowTrackEl.style.width = SHADOW_TRK_W + 'px';
+  for (let h = 0; h <= 24; h++) {
+    const isMajor = h % 3 === 0;
+    const tick = document.createElement('div');
+    tick.className = 'tl-tick' + (isMajor ? ' tl-tick-major' : '');
+    tick.style.left = Math.min(h * 60 * SHADOW_SCALE, SHADOW_TRK_W) + 'px';
+    if (isMajor) {
+      const lbl = document.createElement('span');
+      lbl.textContent = h + 'h';
+      tick.appendChild(lbl);
+    }
+    shadowTrackEl.appendChild(tick);
+  }
+})();
 
 function _fmtTime(totalMin) {
   return String(Math.floor(totalMin / 60)).padStart(2, '0') + ':' +
@@ -920,14 +954,29 @@ function _toDateInputVal(date) {
 
 let _shadowMinutes = 720;
 let _shadowTimer   = null;
+let _tlDragX       = null;  // clientX at drag start
+let _tlDragOffset  = null;  // track translateX at drag start
 
-function _setShadowMinutes(mins) {
-  _shadowMinutes = Math.max(0, Math.min(1439, mins));
-  shadowThumbEl.style.left = (_shadowMinutes / 1439 * 100) + '%';
+function _minsToOffset(mins) {
+  return shadowTimelineEl.clientWidth / 2 - mins * SHADOW_SCALE;
+}
+
+function _applyOffset(dx) {
+  const cw  = shadowTimelineEl.clientWidth;
+  const min = cw / 2 - SHADOW_TRK_W;  // max-left: 23:59 at centre
+  const max = cw / 2;                  // max-right: 00:00 at centre
+  dx = Math.max(min, Math.min(max, dx));
+  shadowTrackEl.style.transform = `translateX(${dx}px)`;
+  _shadowMinutes = Math.max(0, Math.min(1439,
+    Math.round((cw / 2 - dx) / SHADOW_SCALE)));
   shadowBubbleEl.textContent = _fmtTime(_shadowMinutes);
   shadowTimelineEl.setAttribute('aria-valuenow', _shadowMinutes);
   clearTimeout(_shadowTimer);
   _shadowTimer = setTimeout(_applyShadowDateTime, 80);
+}
+
+function _setShadowMinutes(mins) {
+  _applyOffset(_minsToOffset(Math.max(0, Math.min(1439, mins))));
 }
 
 function _applyShadowDateTime() {
@@ -947,8 +996,9 @@ btnShadow.addEventListener('click', () => {
     const now = new Date();
     state.shadowDate   = now;
     shadowDateEl.value = _toDateInputVal(now);
-    _setShadowMinutes(now.getHours() * 60 + now.getMinutes());
+    // Show bar first so clientWidth is valid for offset calculation
     shadowBarEl.classList.remove('hidden');
+    _setShadowMinutes(now.getHours() * 60 + now.getMinutes());
     updateShadow();
     if (map3dEl.classList.contains('hidden')) shadowLayer.addTo(map);
   } else {
@@ -957,28 +1007,22 @@ btnShadow.addEventListener('click', () => {
   }
 });
 
-// Timeline drag interaction (pointer events work for both mouse and touch)
-function _timelineToMins(clientX) {
-  const rect = shadowTimelineEl.getBoundingClientRect();
-  const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-  return Math.round(frac * 1439 / 15) * 15;
-}
-
-let _tlDragging = false;
+// Drag: the TRACK moves, the centre pointer stays fixed
 shadowTimelineEl.addEventListener('pointerdown', e => {
   e.preventDefault();
   shadowTimelineEl.setPointerCapture(e.pointerId);
-  _tlDragging = true;
-  _setShadowMinutes(_timelineToMins(e.clientX));
+  _tlDragX = e.clientX;
+  const m = shadowTrackEl.style.transform.match(/translateX\(([^p]+)px\)/);
+  _tlDragOffset = m ? parseFloat(m[1]) : _minsToOffset(_shadowMinutes);
 });
 shadowTimelineEl.addEventListener('pointermove', e => {
-  if (!_tlDragging) return;
-  _setShadowMinutes(_timelineToMins(e.clientX));
+  if (_tlDragX === null) return;
+  _applyOffset(_tlDragOffset + (e.clientX - _tlDragX));
 });
-shadowTimelineEl.addEventListener('pointerup',     () => { _tlDragging = false; });
-shadowTimelineEl.addEventListener('pointercancel', () => { _tlDragging = false; });
+shadowTimelineEl.addEventListener('pointerup',     () => { _tlDragX = null; });
+shadowTimelineEl.addEventListener('pointercancel', () => { _tlDragX = null; });
 
-// Keyboard: arrows ±15 min, Page keys ±1 h
+// Keyboard: arrows ±15 min, Page ±1 h, Home/End
 shadowTimelineEl.addEventListener('keydown', e => {
   const step = { ArrowLeft: -15, ArrowDown: -15, ArrowRight: 15, ArrowUp: 15,
                  PageDown: -60, PageUp: 60, Home: -1439, End: 1439 }[e.key];
@@ -1415,61 +1459,6 @@ function setMapBearing(deg) {
 }
 
 btnCompass.addEventListener('click', () => setMapBearing(0));
-
-// Two-finger rotation gesture on the 2D map
-// Uses gesture-recognition: stay in "undecided" mode (Leaflet zoom works normally)
-// until cumulative angle change exceeds ROTATION_ACTIVATE, then commit to rotation.
-let _touchGesture = null; // { startAngle, prevAngle, mode: 'undecided'|'rotating' }
-const ROTATION_ACTIVATE = 12; // degrees of cumulative angle change before rotation locks in
-
-function _touchAngle(touches) {
-  const dx = touches[1].clientX - touches[0].clientX;
-  const dy = touches[1].clientY - touches[0].clientY;
-  return Math.atan2(dy, dx) * (180 / Math.PI);
-}
-
-function _normDeg(d) {
-  if (d >  180) d -= 360;
-  if (d < -180) d += 360;
-  return d;
-}
-
-mapEl.addEventListener('touchstart', e => {
-  if (e.touches.length === 2) {
-    const a = _touchAngle(e.touches);
-    _touchGesture = { startAngle: a, prevAngle: a, mode: 'undecided' };
-  } else {
-    _endTouchGesture();
-  }
-}, { passive: true });
-
-mapEl.addEventListener('touchmove', e => {
-  if (e.touches.length !== 2 || !_touchGesture) return;
-  const angle = _touchAngle(e.touches);
-  const g = _touchGesture;
-
-  if (g.mode === 'undecided') {
-    // Wait until cumulative rotation clearly exceeds threshold before committing
-    if (Math.abs(_normDeg(angle - g.startAngle)) >= ROTATION_ACTIVATE) {
-      g.mode = 'rotating';
-      g.prevAngle = angle;    // reset incremental base so there's no snap
-      map.touchZoom.disable(); // hand off gesture from Leaflet to us
-    }
-    return; // Leaflet handles zoom while undecided
-  }
-
-  // Rotation mode: incremental update each frame
-  const delta = _normDeg(angle - g.prevAngle);
-  g.prevAngle = angle;
-  setMapBearing(state.bearing + delta * 0.75);
-}, { passive: true });
-
-function _endTouchGesture() {
-  if (_touchGesture?.mode === 'rotating') map.touchZoom.enable();
-  _touchGesture = null;
-}
-mapEl.addEventListener('touchend',    e => { if (e.touches.length < 2) _endTouchGesture(); }, { passive: true });
-mapEl.addEventListener('touchcancel', _endTouchGesture, { passive: true });
 
 /* ─── 3D terrain view (MapLibre GL JS) ──────────────────────────────── */
 
