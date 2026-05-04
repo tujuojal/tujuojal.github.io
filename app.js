@@ -1438,6 +1438,8 @@ function init() {
 
 const map3dEl = document.getElementById('map-3d');
 const btn3d   = document.getElementById('btn-3d');
+let map3d     = null;
+let terrain3d = false;
 
 init();
 
@@ -1458,9 +1460,6 @@ function setMapBearing(deg) {
 }
 
 btnCompass.addEventListener('click', () => setMapBearing(0));
-
-let map3d      = null;
-let terrain3d  = false;   // true once terrain source is loaded
 
 /** Build a MapLibre style using the current basemap selection. */
 function build3DStyle() {
