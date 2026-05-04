@@ -1440,6 +1440,9 @@ function init() {
   updateZoomHint();
 }
 
+const map3dEl = document.getElementById('map-3d');
+const btn3d   = document.getElementById('btn-3d');
+
 init();
 
 /* ─── 2D map rotation (bearing) ─────────────────────────────────────── */
@@ -1459,11 +1462,6 @@ function setMapBearing(deg) {
 }
 
 btnCompass.addEventListener('click', () => setMapBearing(0));
-
-/* ─── 3D terrain view (MapLibre GL JS) ──────────────────────────────── */
-
-const map3dEl = document.getElementById('map-3d');
-const btn3d   = document.getElementById('btn-3d');
 
 let map3d      = null;
 let terrain3d  = false;   // true once terrain source is loaded
