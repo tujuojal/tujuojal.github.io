@@ -35,6 +35,10 @@ const NO_TOPO_ATTRIB = '&copy; <a href="https://opentopomap.org">OpenTopoMap</a>
 const NO_GRAY_URL   = 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
 const NO_GRAY_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
 
+// OpenStreetMap
+const OSM_URL   = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const OSM_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
 // Kartverket (Norway) – official Norwegian mapping authority
 // cache.kartverket.no v1 WMTS, CC BY 4.0.
 // Path uses WMTS TileRow/TileCol order: {z}/{y}/{x}.
@@ -42,6 +46,11 @@ const KARTVERKET_BASE  = 'https://cache.kartverket.no/v1/wmts/1.0.0';
 const KARTVERKET_ATTRIB = '&copy; <a href="https://www.kartverket.no">Kartverket</a> CC BY 4.0';
 const KV_TOPO_URL = `${KARTVERKET_BASE}/topo/default/webmercator/{z}/{y}/{x}.png`;
 const KV_GRAY_URL = `${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{y}/{x}.png`;
+
+// GSI (Geospatial Information Authority of Japan / 国土地理院) – free, CC BY 4.0
+const GSI_ATTRIB   = '&copy; <a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>';
+const GSI_STD_URL  = 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png';
+const GSI_PALE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png';
 
 // NLS Finland WCS – 2 m LiDAR elevation model, ETRS-TM35FIN (EPSG:3067)
 // Requires API key.  SUBSET coords are easting/northing in metres.
@@ -111,9 +120,17 @@ const layers = {
     maxZoom: 18,
     attribution: KARTVERKET_ATTRIB,
   }),
-  osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  'gsi-std':  L.tileLayer(GSI_STD_URL, {
+    maxZoom: 18,
+    attribution: GSI_ATTRIB,
+  }),
+  'gsi-pale': L.tileLayer(GSI_PALE_URL, {
+    maxZoom: 18,
+    attribution: GSI_ATTRIB,
+  }),
+  osm: L.tileLayer(OSM_URL, {
     maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    attribution: OSM_ATTRIB,
   }),
 };
 
@@ -127,16 +144,13 @@ function buildMmlLayer(layerName) {
 
 /** Switch active base map.  If NLS layers need an API key, fall back to OSM. */
 function setBasemap(key) {
-  // Remove current layer
   Object.values(layers).forEach(l => l && map.hasLayer(l) && map.removeLayer(l));
 
-  // Build NLS layers lazily (needs API key which may change)
   if (key === 'mml-topo' || key === 'mml-bg') {
     if (!state.apiKey) {
       showToast('Enter an NLS API key to use Maanmittauslaitos maps');
-      // Fall through to OSM
       key = 'osm';
-      document.getElementById('basemap-select').value = 'osm';
+      basemapSelect.value = 'osm';
     } else {
       const layerName = key === 'mml-topo' ? 'maastokartta' : 'taustakartta';
       layers[key] = buildMmlLayer(layerName);
@@ -158,7 +172,6 @@ function setBasemap(key) {
     const bear3d   = wasIn3D ? map3d.getBearing() : null;
     map3d.remove();
     map3d = null;
-    terrain3d = false;
     if (wasIn3D) {
       requestAnimationFrame(() => {
         init3D();
@@ -218,7 +231,7 @@ function toTM35FIN(lon, lat) {
 
 /** Convert slippy-map tile pixel to WGS84. */
 function tilePixelToLatLon(tileX, tileY, z, px, py) {
-  const n = Math.pow(2, z);
+  const n = 2 ** z;
   const lon = (tileX + px / 256) / n * 360 - 180;
   const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * (tileY + py / 256) / n)));
   return { lat: latRad * 180 / Math.PI, lon };
@@ -488,9 +501,10 @@ function slopeColor(deg) {
 
 /** Metres per pixel at given zoom and tile row (accounts for latitude). */
 function metersPerPixel(z, coords) {
-  const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * (coords.y + 0.5) / Math.pow(2, z))));
+  const n = 2 ** z;
+  const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * (coords.y + 0.5) / n)));
   const lat = latRad * (180 / Math.PI);
-  return (40075016.686 * Math.cos(lat * Math.PI / 180)) / (256 * Math.pow(2, z));
+  return (40075016.686 * Math.cos(lat * Math.PI / 180)) / (256 * n);
 }
 
 /* ─── Sun position ───────────────────────────────────────────────────── */
@@ -584,7 +598,6 @@ function computeHillshade(data, mpp) {
       const len   = Math.sqrt(dze * dze + dzs * dzs + 1);
       const shade = Math.max(0, (-dze * lx + dzs * ly + lz) / len);
 
-      // Transparent where lit, dark blue-grey where in shadow
       const a = night ? 210 : Math.round((1 - shade) * 190);
       const i = (y * 256 + x) << 2;
       out[i]     = 10;
@@ -699,15 +712,13 @@ function updateShadow() {
   const sun = sunPosition(state.shadowDate, c.lat, c.lng);
   state.shadowSun = sun;
 
-  // Update the altitude badge in the shadow bar
-  const altEl = document.getElementById('shadow-alt');
-  if (altEl) {
+  if (shadowAltEl) {
     if (sun.altitude > 0) {
-      altEl.textContent = `${Math.round(sun.altitude)}°`;
-      altEl.className   = 'shadow-alt day';
+      shadowAltEl.textContent = `${Math.round(sun.altitude)}°`;
+      shadowAltEl.className   = 'shadow-alt day';
     } else {
-      altEl.textContent = 'night';
-      altEl.className   = 'shadow-alt night';
+      shadowAltEl.textContent = 'night';
+      shadowAltEl.className   = 'shadow-alt night';
     }
   }
 
@@ -828,12 +839,9 @@ toggleSlope.addEventListener('change', () => {
 
 // Auto-add slope layer when zooming in (if toggle is on)
 map.on('zoomend', () => {
-  if (state.slopeActive) {
-    if (map.getZoom() >= MIN_SLOPE_ZOOM && !map.hasLayer(slopeLayer)) {
-      slopeLayer.addTo(map);
-    }
+  if (state.slopeActive && map.getZoom() >= MIN_SLOPE_ZOOM && !map.hasLayer(slopeLayer)) {
+    slopeLayer.addTo(map);
   }
-  updateZoomHint();
 });
 
 // Range sliders
@@ -915,6 +923,7 @@ const shadowDateEl   = document.getElementById('shadow-date');
 const shadowTimelineEl = document.getElementById('shadow-timeline');
 const shadowTrackEl  = document.getElementById('shadow-tl-track');
 const shadowBubbleEl = document.getElementById('shadow-time-label');
+const shadowAltEl    = document.getElementById('shadow-alt');
 
 // 2 px per minute → 1440 min × 2 = 2880 px wide track
 const SHADOW_SCALE = 2;
@@ -1291,7 +1300,6 @@ btnLocate.addEventListener('click', async () => {
   }
 
   _trackingOn    = true;
-  _firstFix      = true;
   btnLocate.classList.add('active');
   btnLocate.style.opacity = '0.6';
 
@@ -1349,9 +1357,9 @@ map.on('click', async e => {
     const elev = sampleGrid(dem, p.E, p.N);
     const elevR = sampleGrid(dem, pR.E, pR.N);
     const elevB = sampleGrid(dem, pB.E, pB.N);
-    slope = Math.atan(Math.sqrt(
-      Math.pow((elevR - elev) / mpp, 2) + Math.pow((elevB - elev) / mpp, 2)
-    )) * (180 / Math.PI);
+    const dzdx = (elevR - elev) / mpp;
+    const dzdy = (elevB - elev) / mpp;
+    slope = Math.atan(Math.sqrt(dzdx * dzdx + dzdy * dzdy)) * (180 / Math.PI);
   } else {
     const [center, right, bottom] = await Promise.all([
       fetchElevTile(tileX,     tileY,     z),
@@ -1364,9 +1372,9 @@ map.on('click', async e => {
     const elev  = getElev(center, px, py);
     const elevR = px < 255 ? getElev(center, px + 1, py) : getElev(right, 0, py);
     const elevB = py < 255 ? getElev(center, px, py + 1) : getElev(bottom, px, 0);
-    slope = Math.atan(Math.sqrt(
-      Math.pow((elevR - elev) / mpp, 2) + Math.pow((elevB - elev) / mpp, 2)
-    )) * (180 / Math.PI);
+    const dzdx = (elevR - elev) / mpp;
+    const dzdy = (elevB - elev) / mpp;
+    slope = Math.atan(Math.sqrt(dzdx * dzdx + dzdy * dzdy)) * (180 / Math.PI);
   }
 
   const src = dem ? 'NLS 2 m DEM' : 'Global DEM';
@@ -1438,6 +1446,7 @@ function init() {
 
 const map3dEl = document.getElementById('map-3d');
 const btn3d   = document.getElementById('btn-3d');
+let map3d     = null;
 
 init();
 
@@ -1459,25 +1468,34 @@ function setMapBearing(deg) {
 
 btnCompass.addEventListener('click', () => setMapBearing(0));
 
-let map3d      = null;
-let terrain3d  = false;   // true once terrain source is loaded
-
 /** Build a MapLibre style using the current basemap selection. */
 function build3DStyle() {
   let tiles, attribution;
   if ((state.basemap === 'mml-topo' || state.basemap === 'mml-bg') && state.apiKey) {
     const layer = state.basemap === 'mml-topo' ? 'maastokartta' : 'taustakartta';
-    tiles       = [`${MML_BASE}/${layer}/default/${MML_MATRIX}/{z}/{y}/{x}.png?api-key=${state.apiKey}`];
+    tiles       = [mmlUrl(layer)];
     attribution = '&copy; <a href="https://www.maanmittauslaitos.fi">Maanmittauslaitos</a>';
-  } else if (state.basemap === 'no-topo' || state.basemap === 'kv-topo') {
+  } else if (state.basemap === 'no-topo') {
     tiles       = [NO_TOPO_URL];
     attribution = NO_TOPO_ATTRIB;
-  } else if (state.basemap === 'no-gray' || state.basemap === 'kv-gray') {
+  } else if (state.basemap === 'kv-topo') {
+    tiles       = [KV_TOPO_URL];
+    attribution = KARTVERKET_ATTRIB;
+  } else if (state.basemap === 'no-gray') {
     tiles       = [NO_GRAY_URL];
     attribution = NO_GRAY_ATTRIB;
+  } else if (state.basemap === 'kv-gray') {
+    tiles       = [KV_GRAY_URL];
+    attribution = KARTVERKET_ATTRIB;
+  } else if (state.basemap === 'gsi-std') {
+    tiles       = [GSI_STD_URL];
+    attribution = GSI_ATTRIB;
+  } else if (state.basemap === 'gsi-pale') {
+    tiles       = [GSI_PALE_URL];
+    attribution = GSI_ATTRIB;
   } else {
-    tiles       = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
-    attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+    tiles       = [OSM_URL];
+    attribution = OSM_ATTRIB;
   }
 
   return {
@@ -1517,7 +1535,6 @@ function init3D() {
   // Enable terrain and register rotate listener once on initial style load
   map3d.once('load', () => {
     map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
-    terrain3d = true;
     if (_trackingOn && _lastPos) _update3DLocMarker();
     // Keep the direction arrow aligned when user two-finger rotates the 3D map
     map3d.on('rotate', () => {
@@ -1530,7 +1547,7 @@ function init3D() {
 }
 
 btn3d.addEventListener('click', () => {
-  const entering3D = mapEl.classList.contains('hidden') === false;
+  const entering3D = !mapEl.classList.contains('hidden');
 
   if (entering3D) {
     // Switch 2D → 3D
