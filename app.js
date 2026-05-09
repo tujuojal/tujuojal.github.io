@@ -43,6 +43,11 @@ const KARTVERKET_ATTRIB = '&copy; <a href="https://www.kartverket.no">Kartverket
 const KV_TOPO_URL = `${KARTVERKET_BASE}/topo/default/webmercator/{z}/{y}/{x}.png`;
 const KV_GRAY_URL = `${KARTVERKET_BASE}/topograatone/default/webmercator/{z}/{y}/{x}.png`;
 
+// GSI (Geospatial Information Authority of Japan / 国土地理院) – free, CC BY 4.0
+const GSI_ATTRIB   = '&copy; <a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>';
+const GSI_STD_URL  = 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png';
+const GSI_PALE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png';
+
 // NLS Finland WCS – 2 m LiDAR elevation model, ETRS-TM35FIN (EPSG:3067)
 // Requires API key.  SUBSET coords are easting/northing in metres.
 const MML_WCS_BASE  = 'https://avoin-karttakuva.maanmittauslaitos.fi/ortokuvat-ja-korkeusmallit/wcs/v2';
@@ -110,6 +115,14 @@ const layers = {
   'kv-gray':  L.tileLayer(KV_GRAY_URL, {
     maxZoom: 18,
     attribution: KARTVERKET_ATTRIB,
+  }),
+  'gsi-std':  L.tileLayer(GSI_STD_URL, {
+    maxZoom: 18,
+    attribution: GSI_ATTRIB,
+  }),
+  'gsi-pale': L.tileLayer(GSI_PALE_URL, {
+    maxZoom: 18,
+    attribution: GSI_ATTRIB,
   }),
   osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
@@ -1474,6 +1487,12 @@ function build3DStyle() {
   } else if (state.basemap === 'no-gray' || state.basemap === 'kv-gray') {
     tiles       = [NO_GRAY_URL];
     attribution = NO_GRAY_ATTRIB;
+  } else if (state.basemap === 'gsi-std') {
+    tiles       = [GSI_STD_URL];
+    attribution = GSI_ATTRIB;
+  } else if (state.basemap === 'gsi-pale') {
+    tiles       = [GSI_PALE_URL];
+    attribution = GSI_ATTRIB;
   } else {
     tiles       = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
     attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
