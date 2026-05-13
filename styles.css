@@ -234,6 +234,7 @@ html, body {
 }
 
 #panel-drag {
+  min-height: 44px;
   height: var(--handle-h);
   display: flex;
   align-items: center;

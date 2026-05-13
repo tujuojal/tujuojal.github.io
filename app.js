@@ -338,7 +338,7 @@ function parseAsciiGrid(text) {
     const vals = lines[r].trim().split(/\s+/);
     for (const v of vals) {
       const num = parseFloat(v);
-      grid[idx++] = (num === nodata) ? 0 : num;
+      grid[idx++] = (num === nodata) ? NaN : num;
     }
   }
 
@@ -440,7 +440,7 @@ const SlopeLayer = L.GridLayer.extend({
         const dzdy = (elevB - elev) / mpp;
         const slope = Math.atan(Math.sqrt(dzdx * dzdx + dzdy * dzdy)) * (180 / Math.PI);
 
-        if (slope < minS || slope > maxS) continue;
+        if (isNaN(slope) || slope < minS || slope > maxS) continue;
 
         const color = slopeColor(slope);
         const i = (py * 256 + px) * 4;
@@ -764,7 +764,8 @@ slopeLayer.on('tileerror',     stopLoading);
 const zoomHint = document.getElementById('zoom-hint');
 
 function updateZoomHint() {
-  if (state.slopeActive && map.getZoom() < MIN_SLOPE_ZOOM) {
+  const in3D = !map3dEl.classList.contains('hidden');
+  if (!in3D && state.slopeActive && map.getZoom() < MIN_SLOPE_ZOOM) {
     zoomHint.classList.remove('hidden');
   } else {
     zoomHint.classList.add('hidden');
@@ -850,6 +851,17 @@ const maxSliderEl = document.getElementById('max-slope');
 const rangeDisplay = document.getElementById('slope-range-display');
 const rangeFill = document.getElementById('range-fill');
 
+// Legend items paired with their slope angle ranges
+const _legendItems = document.querySelectorAll('.legend-item');
+const _LEGEND_RANGES = [{ lo: 15, hi: 25 }, { lo: 25, hi: 30 }, { lo: 30, hi: 38 }, { lo: 38, hi: 60 }];
+
+function updateLegend() {
+  _legendItems.forEach((el, i) => {
+    const { lo, hi } = _LEGEND_RANGES[i];
+    el.style.opacity = (hi > state.minSlope && lo < state.maxSlope) ? '' : '0.25';
+  });
+}
+
 function updateRangeUI() {
   const min = parseInt(minSliderEl.value, 10);
   const max = parseInt(maxSliderEl.value, 10);
@@ -859,6 +871,7 @@ function updateRangeUI() {
   rangeFill.style.left  = pctMin + '%';
   rangeFill.style.width = Math.max(0, pctMax - pctMin) + '%';
   rangeDisplay.textContent = `${min}° – ${max}°`;
+  updateLegend();
 }
 
 minSliderEl.addEventListener('input', () => {
@@ -996,6 +1009,7 @@ function _applyShadowDateTime() {
 btnShadow.addEventListener('click', () => {
   state.shadowActive = !state.shadowActive;
   btnShadow.classList.toggle('active', state.shadowActive);
+  btnShadow.setAttribute('aria-pressed', String(state.shadowActive));
 
   if (state.shadowActive) {
     const now = new Date();
@@ -1038,12 +1052,9 @@ shadowTimelineEl.addEventListener('keydown', e => {
 
 shadowDateEl.addEventListener('change', _applyShadowDateTime);
 
-// Keep sun position current as the user pans to new latitudes
+// Keep sun position and hillshade current as the user pans to new latitudes
 map.on('moveend', () => {
-  if (state.shadowActive) {
-    const c = map.getCenter();
-    state.shadowSun = sunPosition(state.shadowDate, c.lat, c.lng);
-  }
+  if (state.shadowActive) updateShadow();
 });
 
 // Geolocation + device heading
@@ -1274,6 +1285,7 @@ function _stopTracking() {
   _trackingOn    = false;
   _firstFix      = true;
   btnLocate.classList.remove('active');
+  btnLocate.setAttribute('aria-pressed', 'false');
   btnLocate.style.opacity = '';
 }
 
@@ -1301,6 +1313,7 @@ btnLocate.addEventListener('click', async () => {
 
   _trackingOn    = true;
   btnLocate.classList.add('active');
+  btnLocate.setAttribute('aria-pressed', 'true');
   btnLocate.style.opacity = '0.6';
 
   // Start orientation tracking immediately (permission already resolved above)
@@ -1377,6 +1390,8 @@ map.on('click', async e => {
     slope = Math.atan(Math.sqrt(dzdx * dzdx + dzdy * dzdy)) * (180 / Math.PI);
   }
 
+  if (isNaN(slope)) return;
+
   const src = dem ? 'NLS 2 m DEM' : 'Global DEM';
   const containerPt = map.latLngToContainerPoint(e.latlng);
 
@@ -1408,14 +1423,13 @@ function showToast(msg) {
   if (!toastEl) {
     toastEl = document.createElement('div');
     toastEl.style.cssText = [
-      'position:fixed', 'bottom:120px', 'left:50%', 'transform:translateX(-50%)',
+      'position:fixed', 'bottom:calc(80px + env(safe-area-inset-bottom, 0px))', 'left:50%', 'transform:translateX(-50%)',
       'background:rgba(13,27,42,0.92)', 'color:#f0f4f8',
       'padding:10px 18px', 'border-radius:20px',
       'font-size:14px', 'z-index:1000',
       'border:1px solid rgba(255,255,255,0.1)',
       'backdrop-filter:blur(8px)',
       'pointer-events:none',
-      'white-space:nowrap',
       'max-width:90vw', 'text-align:center',
     ].join(';');
     document.body.appendChild(toastEl);
