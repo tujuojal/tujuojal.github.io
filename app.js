@@ -1464,6 +1464,16 @@ let map3d     = null;
 
 init();
 
+// iOS Safari measures the map container before the 150%-oversized layout is
+// finalised, so Leaflet's initial tile queue misses the visible centre. A
+// post-paint invalidateSize forces a correct re-measure and tile reload.
+// The visualViewport resize covers iOS address-bar show/hide, which changes
+// the effective viewport height without firing window.resize.
+requestAnimationFrame(() => map.invalidateSize());
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => map.invalidateSize());
+}
+
 /* ─── 2D map rotation (bearing) ─────────────────────────────────────── */
 
 const mapEl        = document.getElementById('map');
