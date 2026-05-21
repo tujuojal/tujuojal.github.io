@@ -1078,24 +1078,25 @@ const avalancheSteepLayer = L.tileLayer.wms(NVE_BRATTHET_URL, {
 
 // Nationwide snow avalanche runout zones — three NVE SnoskredAktsomhet layers stacked by probability.
 // S3 (largest) = 5% probability; S2-no-forest = 25%; S2-with-forest (smallest) = 50%.
-// Each rendered above the steepness layer (zIndex > 410).
+// Runout layers are rendered BELOW the steepness layer (zIndex < 410) so steep-terrain
+// colours show through on top. Largest zone at lowest zIndex so smaller zones stack on top.
 // SVG feColorMatrix filters (index.html) recolour the NVE pale-blue zone pixels to the target hue
 // and make the pink non-zone pixels fully transparent.
 const _RUNOUT_LAYERS = [
   { layer: L.tileLayer.wms(NVE_AKTSOMHET_URL, {
       layers: 'S3_snoskred_Aktsomhetsomrade',
-      format: 'image/png', transparent: true, opacity: 0.65,
-      attribution: NVE_ATTRIB, pane: 'overlayPane', zIndex: 411,
+      format: 'image/png', transparent: true, opacity: 0.7,
+      attribution: NVE_ATTRIB, pane: 'overlayPane', zIndex: 407,
     }), filter: 'url(#aval-zone-s3)' },
   { layer: L.tileLayer.wms(NVE_AKTSOMHET_URL, {
       layers: 'S2_snoskred_u_skogeffekt_Aktsomhetsomrade',
-      format: 'image/png', transparent: true, opacity: 0.65,
-      attribution: NVE_ATTRIB, pane: 'overlayPane', zIndex: 412,
+      format: 'image/png', transparent: true, opacity: 0.7,
+      attribution: NVE_ATTRIB, pane: 'overlayPane', zIndex: 408,
     }), filter: 'url(#aval-zone-s2u)' },
   { layer: L.tileLayer.wms(NVE_AKTSOMHET_URL, {
       layers: 'S2_snoskred_m_skogeffekt_Aktsomhetsomrade',
-      format: 'image/png', transparent: true, opacity: 0.65,
-      attribution: NVE_ATTRIB, pane: 'overlayPane', zIndex: 413,
+      format: 'image/png', transparent: true, opacity: 0.7,
+      attribution: NVE_ATTRIB, pane: 'overlayPane', zIndex: 409,
     }), filter: 'url(#aval-zone-s2m)' },
 ];
 
