@@ -188,16 +188,8 @@
             <div class="aval-legend-title">Runout zones</div>
             <div class="aval-runout-rows">
               <div class="aval-runout-row">
-                <span class="aval-dot" style="background:#9ecae1"></span>
-                <span>1:5 000 – low probability</span>
-              </div>
-              <div class="aval-runout-row">
-                <span class="aval-dot" style="background:#3182bd"></span>
-                <span>1:1 000 – medium probability</span>
-              </div>
-              <div class="aval-runout-row">
-                <span class="aval-dot" style="background:#08519c"></span>
-                <span>1:100 – high probability</span>
+                <span class="aval-dot" style="background:#4a90d9"></span>
+                <span>Awareness zone (NVE)</span>
               </div>
             </div>
           </div>
@@ -251,6 +243,15 @@
     <div id="slope-tip" class="hidden" role="tooltip"></div>
 
   </div>
+
+  <!-- SVG filter: extracts blue-channel-dominant pixels (NVE zone areas) and renders them as #4a90d9 -->
+  <svg id="pows-svg-filters" style="position:absolute;width:0;height:0" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <filter id="aval-zone-filter" color-interpolation-filters="sRGB">
+        <feColorMatrix type="matrix" values="0 0 0 0 0.29  0 0 0 0 0.565  0 0 0 0 0.851  -8 0 8 0 0"/>
+      </filter>
+    </defs>
+  </svg>
 
   <script src="leaflet.js"></script>
   <script src="maplibre-gl.js"></script>

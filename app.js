@@ -65,8 +65,8 @@ const TERRARIUM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{
 const MIN_SLOPE_ZOOM = 10;
 
 // NVE (Norwegian Water Resources and Energy Directorate) avalanche WMS services
-const NVE_BRATTHET_URL = 'https://kart.nve.no/enterprise/services/Bratthet/MapServer/WMSServer';
-const NVE_FAREZONE_URL = 'https://kart.nve.no/enterprise/services/Skredfaresoner3/MapServer/WMSServer';
+const NVE_BRATTHET_URL   = 'https://kart.nve.no/enterprise/services/Bratthet/MapServer/WMSServer';
+const NVE_AKTSOMHET_URL  = 'https://kart.nve.no/enterprise/services/SnoskredAktsomhet/MapServer/WMSServer';
 const NVE_ATTRIB       = '&copy; <a href="https://www.nve.no">NVE</a>';
 
 // Simple LRU-style tile data cache (raw RGBA arrays)
@@ -1076,30 +1076,21 @@ const avalancheSteepLayer = L.tileLayer.wms(NVE_BRATTHET_URL, {
   zIndex:      410,
 });
 
-// Runout layers — hue-rotated to blue by applying a CSS filter directly to
-// each layer's tile container after it is added to the map.
-// NVE serves these in red/orange/yellow; hue-rotate(185deg) maps them to
-// light-blue (1:5000) → blue (1:1000) → dark-blue (1:100).
-function _makeRunoutLayer(layerName) {
-  const l = L.tileLayer.wms(NVE_FAREZONE_URL, {
-    layers: layerName, format: 'image/png', transparent: true,
-    opacity: 0.75, attribution: NVE_ATTRIB, pane: 'overlayPane',
-  });
-  l.on('add', function () {
-    if (this._container) this._container.style.filter = 'hue-rotate(185deg) saturate(0.9)';
-  });
-  return l;
-}
+// Nationwide snow avalanche awareness zones (NVE SnoskredAktsomhet WMS).
+// Rendered above steepness layer (zIndex 415 > 410).
+// SVG feColorMatrix filter (#aval-zone-filter in index.html) extracts zone pixels
+// (blue channel > red channel) and renders them as vivid #4a90d9; everything else transparent.
+const avalancheRunoutLayer = L.tileLayer.wms(NVE_AKTSOMHET_URL, {
+  layers:      'S2_snoskred_m_skogeffekt_Aktsomhetsomrade',
+  format:      'image/png',
+  transparent: true,
+  opacity:     0.6,
+  attribution: NVE_ATTRIB,
+  pane:        'overlayPane',
+  zIndex:      415,
+});
 
-// Snow avalanche hazard zones — "med hensyn til skog" (with forest consideration)
-const avalancheRunout5000Layer = _makeRunoutLayer('Skredfaresone_50005902');  // 1:5000
-const avalancheRunout1000Layer = _makeRunoutLayer('Skredfaresone_100031997'); // 1:1000
-const avalancheRunout100Layer  = _makeRunoutLayer('Skredfaresone_10026673');  // 1:100
-
-const _avalancheLayers = [
-  avalancheSteepLayer,
-  avalancheRunout5000Layer, avalancheRunout1000Layer, avalancheRunout100Layer,
-];
+const _avalancheLayers = [avalancheSteepLayer, avalancheRunoutLayer];
 
 const toggleAvalanche = document.getElementById('toggle-avalanche');
 
@@ -1108,6 +1099,10 @@ function _applyAvalancheLayers() {
     if (state.avalancheActive) { if (!map.hasLayer(l)) l.addTo(map); }
     else                       { if ( map.hasLayer(l)) map.removeLayer(l); }
   });
+  if (state.avalancheActive) {
+    const c = avalancheRunoutLayer.getContainer();
+    if (c) c.style.filter = 'url(#aval-zone-filter)';
+  }
 }
 
 toggleAvalanche.addEventListener('change', () => {
