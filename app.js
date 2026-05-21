@@ -89,8 +89,10 @@ const state = {
   shadowActive:       false,
   shadowDate:         new Date(),
   shadowSun:          { azimuth: 180, altitude: 45 }, // updated by updateShadow()
-  avalancheActive:      false,
-  avalancheHazardActive: false,
+  avalancheActive:        false,
+  avalancheHz100Active:   false,
+  avalancheHz1000Active:  false,
+  avalancheHz5000Active:  false,
 };
 
 /* ─── Map setup ─────────────────────────────────────────────────────── */
@@ -1070,39 +1072,59 @@ const avalancheLayer = L.tileLayer.wms(NVE_AKTSOMHET_URL, {
   layers:      'S3_snoskred_Aktsomhetsomrade',
   format:      'image/png',
   transparent: true,
-  opacity:     0.55,
+  opacity:     0.6,
   attribution: NVE_ATTRIB,
   pane:        'overlayPane',
   zIndex:      410,
 });
 
-const avalancheHazardLayer = L.tileLayer.wms(NVE_FAREZONE_URL, {
-  layers:      'Skredfaresone_100031997',  // snow avalanche 1:100 return period
+// Hazard zones — 3 return periods, with forest consideration (med hensyn til skog)
+// NVE official colours: 1:100 red, 1:1000 orange, 1:5000 yellow
+const avalancheHz100Layer = L.tileLayer.wms(NVE_FAREZONE_URL, {
+  layers:      'Skredfaresone_10026673',
   format:      'image/png',
   transparent: true,
-  opacity:     0.65,
+  opacity:     0.7,
+  attribution: NVE_ATTRIB,
+  pane:        'overlayPane',
+  zIndex:      430,
+});
+
+const avalancheHz1000Layer = L.tileLayer.wms(NVE_FAREZONE_URL, {
+  layers:      'Skredfaresone_100031997',
+  format:      'image/png',
+  transparent: true,
+  opacity:     0.7,
   attribution: NVE_ATTRIB,
   pane:        'overlayPane',
   zIndex:      420,
 });
 
-const toggleAvalanche      = document.getElementById('toggle-avalanche');
-const toggleAvalancheHazard = document.getElementById('toggle-avalanche-hazard');
-const avalancheControls    = document.getElementById('avalanche-controls');
+const avalancheHz5000Layer = L.tileLayer.wms(NVE_FAREZONE_URL, {
+  layers:      'Skredfaresone_50005902',
+  format:      'image/png',
+  transparent: true,
+  opacity:     0.7,
+  attribution: NVE_ATTRIB,
+  pane:        'overlayPane',
+  zIndex:      415,
+});
+
+const toggleAvalanche     = document.getElementById('toggle-avalanche');
+const toggleAvalHz100     = document.getElementById('toggle-aval-hz-100');
+const toggleAvalHz1000    = document.getElementById('toggle-aval-hz-1000');
+const toggleAvalHz5000    = document.getElementById('toggle-aval-hz-5000');
+const avalancheControls   = document.getElementById('avalanche-controls');
 
 function _applyAvalancheLayers() {
-  // Susceptibility layer
-  if (state.avalancheActive) {
-    if (!map.hasLayer(avalancheLayer)) avalancheLayer.addTo(map);
-  } else {
-    if (map.hasLayer(avalancheLayer)) map.removeLayer(avalancheLayer);
+  function _sync(active, layer) {
+    if (active) { if (!map.hasLayer(layer)) layer.addTo(map); }
+    else        { if ( map.hasLayer(layer)) map.removeLayer(layer); }
   }
-  // Hazard zone layer (sub-option, only active when parent is active)
-  if (state.avalancheActive && state.avalancheHazardActive) {
-    if (!map.hasLayer(avalancheHazardLayer)) avalancheHazardLayer.addTo(map);
-  } else {
-    if (map.hasLayer(avalancheHazardLayer)) map.removeLayer(avalancheHazardLayer);
-  }
+  _sync(state.avalancheActive,                          avalancheLayer);
+  _sync(state.avalancheActive && state.avalancheHz100Active,  avalancheHz100Layer);
+  _sync(state.avalancheActive && state.avalancheHz1000Active, avalancheHz1000Layer);
+  _sync(state.avalancheActive && state.avalancheHz5000Active, avalancheHz5000Layer);
 }
 
 toggleAvalanche.addEventListener('change', () => {
@@ -1114,8 +1136,16 @@ toggleAvalanche.addEventListener('change', () => {
   _applyAvalancheLayers();
 });
 
-toggleAvalancheHazard.addEventListener('change', () => {
-  state.avalancheHazardActive = toggleAvalancheHazard.checked;
+toggleAvalHz100.addEventListener('change', () => {
+  state.avalancheHz100Active = toggleAvalHz100.checked;
+  _applyAvalancheLayers();
+});
+toggleAvalHz1000.addEventListener('change', () => {
+  state.avalancheHz1000Active = toggleAvalHz1000.checked;
+  _applyAvalancheLayers();
+});
+toggleAvalHz5000.addEventListener('change', () => {
+  state.avalancheHz5000Active = toggleAvalHz5000.checked;
   _applyAvalancheLayers();
 });
 
@@ -1647,8 +1677,8 @@ btn3d.addEventListener('click', () => {
     if (state.slopeActive)  showToast('Slope overlay is not shown in 3D view');
     if (state.shadowActive && map.hasLayer(shadowLayer)) map.removeLayer(shadowLayer);
     if (state.avalancheActive) {
-      if (map.hasLayer(avalancheLayer))      map.removeLayer(avalancheLayer);
-      if (map.hasLayer(avalancheHazardLayer)) map.removeLayer(avalancheHazardLayer);
+      [avalancheLayer, avalancheHz100Layer, avalancheHz1000Layer, avalancheHz5000Layer]
+        .forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
     }
     // Defer init/resize by one frame so the browser computes the container's
     // layout (clientWidth/clientHeight) before MapLibre reads it.

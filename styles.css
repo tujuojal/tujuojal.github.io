@@ -479,14 +479,36 @@ html, body {
   border: 1px solid var(--border);
 }
 
+/* S3 susceptibility swatch — red dot pattern matching NVE legend */
+.aval-swatch-s3 {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background-color: rgba(220,53,69,0.15);
+  background-image: radial-gradient(circle, rgba(220,53,69,0.9) 2px, transparent 2px);
+  background-size: 5px 5px;
+  border: 1px solid rgba(220,53,69,0.4);
+}
+
+.avalanche-hz-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+  margin: 6px 0 4px;
+}
+
 .avalanche-check-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   font-size: 13px;
   color: var(--text-1);
   cursor: pointer;
-  padding: 4px 0;
+  padding: 3px 0;
 }
 
 .avalanche-check-row input[type="checkbox"] {
@@ -496,6 +518,18 @@ html, body {
   accent-color: var(--accent);
   cursor: pointer;
 }
+
+/* Colour dots matching NVE official hazard zone colours */
+.aval-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.aval-dot-100  { background: #c0392b; }
+.aval-dot-1000 { background: #e67e22; }
+.aval-dot-5000 { background: #f1c40f; }
 
 /* ─── Base map select ────────────────────────────────────────────────── */
 select {
