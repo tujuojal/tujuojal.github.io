@@ -1076,21 +1076,30 @@ const avalancheSteepLayer = L.tileLayer.wms(NVE_BRATTHET_URL, {
   zIndex:      410,
 });
 
-// Nationwide snow avalanche awareness zones (NVE SnoskredAktsomhet WMS).
-// Rendered above steepness layer (zIndex 415 > 410).
-// SVG feColorMatrix filter (#aval-zone-filter in index.html) extracts zone pixels
-// (blue channel > red channel) and renders them as vivid #4a90d9; everything else transparent.
-const avalancheRunoutLayer = L.tileLayer.wms(NVE_AKTSOMHET_URL, {
-  layers:      'S2_snoskred_m_skogeffekt_Aktsomhetsomrade',
-  format:      'image/png',
-  transparent: true,
-  opacity:     0.6,
-  attribution: NVE_ATTRIB,
-  pane:        'overlayPane',
-  zIndex:      415,
-});
+// Nationwide snow avalanche runout zones — three NVE SnoskredAktsomhet layers stacked by probability.
+// S3 (largest) = 5% probability; S2-no-forest = 25%; S2-with-forest (smallest) = 50%.
+// Each rendered above the steepness layer (zIndex > 410).
+// SVG feColorMatrix filters (index.html) recolour the NVE pale-blue zone pixels to the target hue
+// and make the pink non-zone pixels fully transparent.
+const _RUNOUT_LAYERS = [
+  { layer: L.tileLayer.wms(NVE_AKTSOMHET_URL, {
+      layers: 'S3_snoskred_Aktsomhetsomrade',
+      format: 'image/png', transparent: true, opacity: 0.65,
+      attribution: NVE_ATTRIB, pane: 'overlayPane', zIndex: 411,
+    }), filter: 'url(#aval-zone-s3)' },
+  { layer: L.tileLayer.wms(NVE_AKTSOMHET_URL, {
+      layers: 'S2_snoskred_u_skogeffekt_Aktsomhetsomrade',
+      format: 'image/png', transparent: true, opacity: 0.65,
+      attribution: NVE_ATTRIB, pane: 'overlayPane', zIndex: 412,
+    }), filter: 'url(#aval-zone-s2u)' },
+  { layer: L.tileLayer.wms(NVE_AKTSOMHET_URL, {
+      layers: 'S2_snoskred_m_skogeffekt_Aktsomhetsomrade',
+      format: 'image/png', transparent: true, opacity: 0.65,
+      attribution: NVE_ATTRIB, pane: 'overlayPane', zIndex: 413,
+    }), filter: 'url(#aval-zone-s2m)' },
+];
 
-const _avalancheLayers = [avalancheSteepLayer, avalancheRunoutLayer];
+const _avalancheLayers = [avalancheSteepLayer, ..._RUNOUT_LAYERS.map(r => r.layer)];
 
 const toggleAvalanche = document.getElementById('toggle-avalanche');
 
@@ -1100,8 +1109,10 @@ function _applyAvalancheLayers() {
     else                       { if ( map.hasLayer(l)) map.removeLayer(l); }
   });
   if (state.avalancheActive) {
-    const c = avalancheRunoutLayer.getContainer();
-    if (c) c.style.filter = 'url(#aval-zone-filter)';
+    _RUNOUT_LAYERS.forEach(({ layer, filter }) => {
+      const c = layer.getContainer();
+      if (c) c.style.filter = filter;
+    });
   }
 }
 
