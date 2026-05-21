@@ -1076,28 +1076,25 @@ const avalancheSteepLayer = L.tileLayer.wms(NVE_BRATTHET_URL, {
   zIndex:      410,
 });
 
-// Runout layers — hue-rotated to blue via a custom Leaflet pane.
+// Runout layers — hue-rotated to blue by applying a CSS filter directly to
+// each layer's tile container after it is added to the map.
 // NVE serves these in red/orange/yellow; hue-rotate(185deg) maps them to
-// light-blue (1:5000) → blue (1:1000) → indigo-blue (1:100).
-const _runoutPane = map.createPane('runoutPane');
-_runoutPane.style.zIndex  = '420';
-_runoutPane.style.filter  = 'hue-rotate(185deg) saturate(0.9)';
-
-const _runoutWmsOpts = {
-  format:      'image/png',
-  transparent: true,
-  opacity:     0.72,
-  attribution: NVE_ATTRIB,
-  pane:        'runoutPane',
-};
+// light-blue (1:5000) → blue (1:1000) → dark-blue (1:100).
+function _makeRunoutLayer(layerName) {
+  const l = L.tileLayer.wms(NVE_FAREZONE_URL, {
+    layers: layerName, format: 'image/png', transparent: true,
+    opacity: 0.75, attribution: NVE_ATTRIB, pane: 'overlayPane',
+  });
+  l.on('add', function () {
+    if (this._container) this._container.style.filter = 'hue-rotate(185deg) saturate(0.9)';
+  });
+  return l;
+}
 
 // Snow avalanche hazard zones — "med hensyn til skog" (with forest consideration)
-const avalancheRunout5000Layer = L.tileLayer.wms(NVE_FAREZONE_URL,
-  { ..._runoutWmsOpts, layers: 'Skredfaresone_50005902' });  // 1:5000  yellow → light-blue
-const avalancheRunout1000Layer = L.tileLayer.wms(NVE_FAREZONE_URL,
-  { ..._runoutWmsOpts, layers: 'Skredfaresone_100031997' }); // 1:1000  orange → blue
-const avalancheRunout100Layer  = L.tileLayer.wms(NVE_FAREZONE_URL,
-  { ..._runoutWmsOpts, layers: 'Skredfaresone_10026673' });  // 1:100   red    → dark blue
+const avalancheRunout5000Layer = _makeRunoutLayer('Skredfaresone_50005902');  // 1:5000
+const avalancheRunout1000Layer = _makeRunoutLayer('Skredfaresone_100031997'); // 1:1000
+const avalancheRunout100Layer  = _makeRunoutLayer('Skredfaresone_10026673');  // 1:100
 
 const _avalancheLayers = [
   avalancheSteepLayer,
