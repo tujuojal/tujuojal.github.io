@@ -467,6 +467,36 @@ html, body {
   flex-shrink: 0;
 }
 
+/* ─── Avalanche controls ─────────────────────────────────────────────── */
+.avalanche-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.avalanche-check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-1);
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.avalanche-check-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* ─── Base map select ────────────────────────────────────────────────── */
 select {
   background: var(--bg-2);

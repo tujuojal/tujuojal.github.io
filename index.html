@@ -156,6 +156,40 @@
 
         <div class="divider"></div>
 
+        <!-- Avalanche zones overlay -->
+        <div class="control-row">
+          <div class="control-label">
+            <span class="label-text">Avalanche Zones</span>
+            <span class="label-sub">NVE susceptibility · Norway only</span>
+          </div>
+          <label class="toggle" aria-label="Toggle avalanche zones overlay">
+            <input type="checkbox" id="toggle-avalanche">
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+
+        <!-- Avalanche zone type selector -->
+        <div id="avalanche-controls" class="control-section disabled">
+          <div class="avalanche-legend">
+            <div class="legend-item">
+              <span class="legend-swatch" style="background: rgba(220,53,69,0.55)"></span>
+              <span>Susceptibility area (S3)</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-swatch" style="background: rgba(255,140,0,0.6)"></span>
+              <span>Hazard zone 1:100</span>
+            </div>
+          </div>
+          <label class="avalanche-check-row">
+            <input type="checkbox" id="toggle-avalanche-hazard">
+            <span>Show formal hazard zones (1:100)</span>
+          </label>
+        </div>
+
+        <div class="divider"></div>
+
         <!-- Base map selector -->
         <div class="control-row">
           <div class="control-label">

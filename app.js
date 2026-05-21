@@ -64,6 +64,11 @@ const TERRARIUM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{
 // Minimum zoom at which slope calculation is meaningful
 const MIN_SLOPE_ZOOM = 10;
 
+// NVE (Norwegian Water Resources and Energy Directorate) avalanche WMS services
+const NVE_AKTSOMHET_URL   = 'https://kart.nve.no/enterprise/services/SnoskredAktsomhet/MapServer/WMSServer';
+const NVE_FAREZONE_URL    = 'https://kart.nve.no/enterprise/services/Skredfaresoner3/MapServer/WMSServer';
+const NVE_ATTRIB          = '&copy; <a href="https://www.nve.no">NVE</a>';
+
 // Simple LRU-style tile data cache (raw RGBA arrays)
 const elevCache = new Map();
 const wcsCache  = new Map();
@@ -76,14 +81,16 @@ try { _savedApiKey = localStorage.getItem('mml_api_key') || ''; } catch {}
 
 const state = {
   apiKey: _savedApiKey,
-  slopeActive:  false,
-  minSlope:     15,
-  maxSlope:     45,
-  basemap:      'mml-topo',
-  bearing:      0,       // map rotation, degrees clockwise from north (2D view only)
-  shadowActive: false,
-  shadowDate:   new Date(),
-  shadowSun:    { azimuth: 180, altitude: 45 }, // updated by updateShadow()
+  slopeActive:        false,
+  minSlope:           15,
+  maxSlope:           45,
+  basemap:            'mml-topo',
+  bearing:            0,       // map rotation, degrees clockwise from north (2D view only)
+  shadowActive:       false,
+  shadowDate:         new Date(),
+  shadowSun:          { azimuth: 180, altitude: 45 }, // updated by updateShadow()
+  avalancheActive:      false,
+  avalancheHazardActive: false,
 };
 
 /* ─── Map setup ─────────────────────────────────────────────────────── */
@@ -1057,6 +1064,61 @@ map.on('moveend', () => {
   if (state.shadowActive) updateShadow();
 });
 
+/* ─── Avalanche zone overlays (NVE, Norway only) ─────────────────────── */
+
+const avalancheLayer = L.tileLayer.wms(NVE_AKTSOMHET_URL, {
+  layers:      'S3_snoskred_Aktsomhetsomrade',
+  format:      'image/png',
+  transparent: true,
+  opacity:     0.55,
+  attribution: NVE_ATTRIB,
+  pane:        'overlayPane',
+  zIndex:      410,
+});
+
+const avalancheHazardLayer = L.tileLayer.wms(NVE_FAREZONE_URL, {
+  layers:      'Skredfaresone_100031997',  // snow avalanche 1:100 return period
+  format:      'image/png',
+  transparent: true,
+  opacity:     0.65,
+  attribution: NVE_ATTRIB,
+  pane:        'overlayPane',
+  zIndex:      420,
+});
+
+const toggleAvalanche      = document.getElementById('toggle-avalanche');
+const toggleAvalancheHazard = document.getElementById('toggle-avalanche-hazard');
+const avalancheControls    = document.getElementById('avalanche-controls');
+
+function _applyAvalancheLayers() {
+  // Susceptibility layer
+  if (state.avalancheActive) {
+    if (!map.hasLayer(avalancheLayer)) avalancheLayer.addTo(map);
+  } else {
+    if (map.hasLayer(avalancheLayer)) map.removeLayer(avalancheLayer);
+  }
+  // Hazard zone layer (sub-option, only active when parent is active)
+  if (state.avalancheActive && state.avalancheHazardActive) {
+    if (!map.hasLayer(avalancheHazardLayer)) avalancheHazardLayer.addTo(map);
+  } else {
+    if (map.hasLayer(avalancheHazardLayer)) map.removeLayer(avalancheHazardLayer);
+  }
+}
+
+toggleAvalanche.addEventListener('change', () => {
+  state.avalancheActive = toggleAvalanche.checked;
+  avalancheControls.classList.toggle('disabled', !state.avalancheActive);
+  if (state.avalancheActive && !map3dEl.classList.contains('hidden')) {
+    showToast('Avalanche zones are shown in 2D view only');
+  }
+  _applyAvalancheLayers();
+});
+
+toggleAvalancheHazard.addEventListener('change', () => {
+  state.avalancheHazardActive = toggleAvalancheHazard.checked;
+  _applyAvalancheLayers();
+});
+
 // Geolocation + device heading
 const btnLocate = document.getElementById('btn-locate');
 
@@ -1584,6 +1646,10 @@ btn3d.addEventListener('click', () => {
     btn3d.setAttribute('aria-pressed', 'true');
     if (state.slopeActive)  showToast('Slope overlay is not shown in 3D view');
     if (state.shadowActive && map.hasLayer(shadowLayer)) map.removeLayer(shadowLayer);
+    if (state.avalancheActive) {
+      if (map.hasLayer(avalancheLayer))      map.removeLayer(avalancheLayer);
+      if (map.hasLayer(avalancheHazardLayer)) map.removeLayer(avalancheHazardLayer);
+    }
     // Defer init/resize by one frame so the browser computes the container's
     // layout (clientWidth/clientHeight) before MapLibre reads it.
     requestAnimationFrame(() => {
@@ -1613,5 +1679,6 @@ btn3d.addEventListener('click', () => {
       shadowLayer.addTo(map);
       updateShadow();
     }
+    if (state.avalancheActive) _applyAvalancheLayers();
   }
 });
