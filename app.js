@@ -859,7 +859,7 @@ const rangeDisplay = document.getElementById('slope-range-display');
 const rangeFill = document.getElementById('range-fill');
 
 // Legend items paired with their slope angle ranges
-const _legendItems = document.querySelectorAll('.legend-item');
+const _legendItems = document.querySelectorAll('#slope-controls .legend-item');
 const _LEGEND_RANGES = [{ lo: 15, hi: 25 }, { lo: 25, hi: 30 }, { lo: 30, hi: 38 }, { lo: 38, hi: 60 }];
 
 function updateLegend() {
