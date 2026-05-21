@@ -156,13 +156,13 @@
 
         <div class="divider"></div>
 
-        <!-- Avalanche zones overlay -->
+        <!-- Avalanche terrain overlay -->
         <div class="control-row">
           <div class="control-label">
-            <span class="label-text">Avalanche Zones</span>
-            <span class="label-sub">NVE susceptibility · Norway only</span>
+            <span class="label-text">Avalanche Terrain</span>
+            <span class="label-sub">NVE steepness &amp; runout · Norway only</span>
           </div>
-          <label class="toggle" aria-label="Toggle avalanche zones overlay">
+          <label class="toggle" aria-label="Toggle avalanche terrain overlay">
             <input type="checkbox" id="toggle-avalanche">
             <span class="toggle-track">
               <span class="toggle-thumb"></span>
@@ -170,30 +170,37 @@
           </label>
         </div>
 
-        <!-- Avalanche zone type selector -->
-        <div id="avalanche-controls" class="control-section disabled">
-          <div class="avalanche-legend">
-            <div class="legend-item">
-              <span class="legend-swatch aval-swatch-s3"></span>
-              <span>S3 susceptibility area</span>
+        <div id="avalanche-controls" class="control-section">
+          <div class="aval-legend-group">
+            <div class="aval-legend-title">Steepness</div>
+            <div class="aval-steep-scale">
+              <span class="aval-steep-seg" style="background:#4caf50"></span>
+              <span class="aval-steep-seg" style="background:#8bc34a"></span>
+              <span class="aval-steep-seg" style="background:#ffeb3b"></span>
+              <span class="aval-steep-seg" style="background:#ff9800"></span>
+              <span class="aval-steep-seg" style="background:#f44336"></span>
+            </div>
+            <div class="aval-steep-labels">
+              <span>27°</span><span>35°</span><span>45°</span><span>90°</span>
             </div>
           </div>
-          <div class="avalanche-hz-header">Runout hazard zones</div>
-          <label class="avalanche-check-row">
-            <input type="checkbox" id="toggle-aval-hz-100">
-            <span class="aval-dot aval-dot-100"></span>
-            <span>1:100 – high probability</span>
-          </label>
-          <label class="avalanche-check-row">
-            <input type="checkbox" id="toggle-aval-hz-1000">
-            <span class="aval-dot aval-dot-1000"></span>
-            <span>1:1 000 – medium probability</span>
-          </label>
-          <label class="avalanche-check-row">
-            <input type="checkbox" id="toggle-aval-hz-5000">
-            <span class="aval-dot aval-dot-5000"></span>
-            <span>1:5 000 – low probability</span>
-          </label>
+          <div class="aval-legend-group">
+            <div class="aval-legend-title">Runout zones</div>
+            <div class="aval-runout-rows">
+              <div class="aval-runout-row">
+                <span class="aval-dot" style="background:#9ecae1"></span>
+                <span>1:5 000 – low probability</span>
+              </div>
+              <div class="aval-runout-row">
+                <span class="aval-dot" style="background:#3182bd"></span>
+                <span>1:1 000 – medium probability</span>
+              </div>
+              <div class="aval-runout-row">
+                <span class="aval-dot" style="background:#08519c"></span>
+                <span>1:100 – high probability</span>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="divider"></div>

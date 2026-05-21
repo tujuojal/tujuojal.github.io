@@ -65,9 +65,9 @@ const TERRARIUM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{
 const MIN_SLOPE_ZOOM = 10;
 
 // NVE (Norwegian Water Resources and Energy Directorate) avalanche WMS services
-const NVE_AKTSOMHET_URL   = 'https://kart.nve.no/enterprise/services/SnoskredAktsomhet/MapServer/WMSServer';
-const NVE_FAREZONE_URL    = 'https://kart.nve.no/enterprise/services/Skredfaresoner3/MapServer/WMSServer';
-const NVE_ATTRIB          = '&copy; <a href="https://www.nve.no">NVE</a>';
+const NVE_BRATTHET_URL = 'https://kart.nve.no/enterprise/services/Bratthet/MapServer/WMSServer';
+const NVE_FAREZONE_URL = 'https://kart.nve.no/enterprise/services/Skredfaresoner3/MapServer/WMSServer';
+const NVE_ATTRIB       = '&copy; <a href="https://www.nve.no">NVE</a>';
 
 // Simple LRU-style tile data cache (raw RGBA arrays)
 const elevCache = new Map();
@@ -89,10 +89,7 @@ const state = {
   shadowActive:       false,
   shadowDate:         new Date(),
   shadowSun:          { azimuth: 180, altitude: 45 }, // updated by updateShadow()
-  avalancheActive:        false,
-  avalancheHz100Active:   false,
-  avalancheHz1000Active:  false,
-  avalancheHz5000Active:  false,
+  avalancheActive: false,
 };
 
 /* ─── Map setup ─────────────────────────────────────────────────────── */
@@ -1068,84 +1065,59 @@ map.on('moveend', () => {
 
 /* ─── Avalanche zone overlays (NVE, Norway only) ─────────────────────── */
 
-const avalancheLayer = L.tileLayer.wms(NVE_AKTSOMHET_URL, {
-  layers:      'S3_snoskred_Aktsomhetsomrade',
+// Steepness layer — NVE official yellow→orange→red colour scheme by degree
+const avalancheSteepLayer = L.tileLayer.wms(NVE_BRATTHET_URL, {
+  layers:      'Bratthet_snoskred',
   format:      'image/png',
   transparent: true,
-  opacity:     0.6,
+  opacity:     0.75,
   attribution: NVE_ATTRIB,
   pane:        'overlayPane',
   zIndex:      410,
 });
 
-// Hazard zones — 3 return periods, with forest consideration (med hensyn til skog)
-// NVE official colours: 1:100 red, 1:1000 orange, 1:5000 yellow
-const avalancheHz100Layer = L.tileLayer.wms(NVE_FAREZONE_URL, {
-  layers:      'Skredfaresone_10026673',
+// Runout layers — hue-rotated to blue via a custom Leaflet pane.
+// NVE serves these in red/orange/yellow; hue-rotate(185deg) maps them to
+// light-blue (1:5000) → blue (1:1000) → indigo-blue (1:100).
+const _runoutPane = map.createPane('runoutPane');
+_runoutPane.style.zIndex  = '420';
+_runoutPane.style.filter  = 'hue-rotate(185deg) saturate(0.9)';
+
+const _runoutWmsOpts = {
   format:      'image/png',
   transparent: true,
-  opacity:     0.7,
+  opacity:     0.72,
   attribution: NVE_ATTRIB,
-  pane:        'overlayPane',
-  zIndex:      430,
-});
+  pane:        'runoutPane',
+};
 
-const avalancheHz1000Layer = L.tileLayer.wms(NVE_FAREZONE_URL, {
-  layers:      'Skredfaresone_100031997',
-  format:      'image/png',
-  transparent: true,
-  opacity:     0.7,
-  attribution: NVE_ATTRIB,
-  pane:        'overlayPane',
-  zIndex:      420,
-});
+// Snow avalanche hazard zones — "med hensyn til skog" (with forest consideration)
+const avalancheRunout5000Layer = L.tileLayer.wms(NVE_FAREZONE_URL,
+  { ..._runoutWmsOpts, layers: 'Skredfaresone_50005902' });  // 1:5000  yellow → light-blue
+const avalancheRunout1000Layer = L.tileLayer.wms(NVE_FAREZONE_URL,
+  { ..._runoutWmsOpts, layers: 'Skredfaresone_100031997' }); // 1:1000  orange → blue
+const avalancheRunout100Layer  = L.tileLayer.wms(NVE_FAREZONE_URL,
+  { ..._runoutWmsOpts, layers: 'Skredfaresone_10026673' });  // 1:100   red    → dark blue
 
-const avalancheHz5000Layer = L.tileLayer.wms(NVE_FAREZONE_URL, {
-  layers:      'Skredfaresone_50005902',
-  format:      'image/png',
-  transparent: true,
-  opacity:     0.7,
-  attribution: NVE_ATTRIB,
-  pane:        'overlayPane',
-  zIndex:      415,
-});
+const _avalancheLayers = [
+  avalancheSteepLayer,
+  avalancheRunout5000Layer, avalancheRunout1000Layer, avalancheRunout100Layer,
+];
 
-const toggleAvalanche     = document.getElementById('toggle-avalanche');
-const toggleAvalHz100     = document.getElementById('toggle-aval-hz-100');
-const toggleAvalHz1000    = document.getElementById('toggle-aval-hz-1000');
-const toggleAvalHz5000    = document.getElementById('toggle-aval-hz-5000');
-const avalancheControls   = document.getElementById('avalanche-controls');
+const toggleAvalanche = document.getElementById('toggle-avalanche');
 
 function _applyAvalancheLayers() {
-  function _sync(active, layer) {
-    if (active) { if (!map.hasLayer(layer)) layer.addTo(map); }
-    else        { if ( map.hasLayer(layer)) map.removeLayer(layer); }
-  }
-  _sync(state.avalancheActive,                          avalancheLayer);
-  _sync(state.avalancheActive && state.avalancheHz100Active,  avalancheHz100Layer);
-  _sync(state.avalancheActive && state.avalancheHz1000Active, avalancheHz1000Layer);
-  _sync(state.avalancheActive && state.avalancheHz5000Active, avalancheHz5000Layer);
+  _avalancheLayers.forEach(l => {
+    if (state.avalancheActive) { if (!map.hasLayer(l)) l.addTo(map); }
+    else                       { if ( map.hasLayer(l)) map.removeLayer(l); }
+  });
 }
 
 toggleAvalanche.addEventListener('change', () => {
   state.avalancheActive = toggleAvalanche.checked;
-  avalancheControls.classList.toggle('disabled', !state.avalancheActive);
   if (state.avalancheActive && !map3dEl.classList.contains('hidden')) {
-    showToast('Avalanche zones are shown in 2D view only');
+    showToast('Avalanche terrain is shown in 2D view only');
   }
-  _applyAvalancheLayers();
-});
-
-toggleAvalHz100.addEventListener('change', () => {
-  state.avalancheHz100Active = toggleAvalHz100.checked;
-  _applyAvalancheLayers();
-});
-toggleAvalHz1000.addEventListener('change', () => {
-  state.avalancheHz1000Active = toggleAvalHz1000.checked;
-  _applyAvalancheLayers();
-});
-toggleAvalHz5000.addEventListener('change', () => {
-  state.avalancheHz5000Active = toggleAvalHz5000.checked;
   _applyAvalancheLayers();
 });
 
@@ -1677,8 +1649,7 @@ btn3d.addEventListener('click', () => {
     if (state.slopeActive)  showToast('Slope overlay is not shown in 3D view');
     if (state.shadowActive && map.hasLayer(shadowLayer)) map.removeLayer(shadowLayer);
     if (state.avalancheActive) {
-      [avalancheLayer, avalancheHz100Layer, avalancheHz1000Layer, avalancheHz5000Layer]
-        .forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
+      _avalancheLayers.forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
     }
     // Defer init/resize by one frame so the browser computes the container's
     // layout (clientWidth/clientHeight) before MapLibre reads it.
