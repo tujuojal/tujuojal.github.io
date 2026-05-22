@@ -254,22 +254,19 @@
 
   <!-- SVG filters for NVE avalanche zone WMS tiles.
        S3 and S2u tiles render zones as a pink stippled pattern on a transparent background.
-       We dilate the alpha channel to fill gaps between dots, then flood-fill with the target colour.
+       feColorMatrix recolours the stipple dots to the target blue while preserving their alpha
+       exactly — no dilation so zone boundaries match the NVE data without any expansion.
        S2m tiles render zones as solid light blue on a pink background; the B>R feColorMatrix
        keeps blue zone pixels opaque and makes pink non-zone pixels fully transparent. -->
   <svg id="pows-svg-filters" style="position:absolute;width:0;height:0" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
       <!-- S3 largest zone → light blue #9ecae1 (5% probability / rare) -->
       <filter id="aval-zone-s3" color-interpolation-filters="sRGB">
-        <feMorphology operator="dilate" radius="4" in="SourceAlpha" result="mask"/>
-        <feFlood flood-color="#9ecae1" flood-opacity="1" result="colour"/>
-        <feComposite in="colour" in2="mask" operator="in"/>
+        <feColorMatrix type="matrix" values="0 0 0 0 0.620  0 0 0 0 0.792  0 0 0 0 0.882  0 0 0 1 0"/>
       </filter>
       <!-- S2 no-forest zone → medium blue #3182bd (25% probability) -->
       <filter id="aval-zone-s2u" color-interpolation-filters="sRGB">
-        <feMorphology operator="dilate" radius="4" in="SourceAlpha" result="mask"/>
-        <feFlood flood-color="#3182bd" flood-opacity="1" result="colour"/>
-        <feComposite in="colour" in2="mask" operator="in"/>
+        <feColorMatrix type="matrix" values="0 0 0 0 0.192  0 0 0 0 0.510  0 0 0 0 0.741  0 0 0 1 0"/>
       </filter>
       <!-- S2 with-forest zone → dark blue #08519c (50% probability / frequent) -->
       <!-- S2m tiles have solid blue zones on a pink background; B>R alpha detects zone pixels. -->
