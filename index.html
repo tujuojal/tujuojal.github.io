@@ -175,29 +175,30 @@
             <div class="aval-legend-title">Steepness</div>
             <div class="aval-steep-scale">
               <span class="aval-steep-seg" style="background:#4caf50"></span>
-              <span class="aval-steep-seg" style="background:#8bc34a"></span>
+              <span class="aval-steep-seg" style="background:#cddc39"></span>
               <span class="aval-steep-seg" style="background:#ffeb3b"></span>
               <span class="aval-steep-seg" style="background:#ff9800"></span>
               <span class="aval-steep-seg" style="background:#f44336"></span>
+              <span class="aval-steep-seg" style="background:#b71c1c"></span>
             </div>
             <div class="aval-steep-labels">
-              <span>27°</span><span>35°</span><span>45°</span><span>90°</span>
+              <span>27°</span><span>30°</span><span>35°</span><span>40°</span><span>45°</span><span>50°+</span>
             </div>
           </div>
           <div class="aval-legend-group">
             <div class="aval-legend-title">Runout zones</div>
             <div class="aval-runout-rows">
               <div class="aval-runout-row">
-                <span class="aval-dot" style="background:#9ecae1"></span>
-                <span>5% probability</span>
+                <span class="aval-dot" style="background:#08519c"></span>
+                <span>50% probability</span>
               </div>
               <div class="aval-runout-row">
                 <span class="aval-dot" style="background:#3182bd"></span>
                 <span>25% probability</span>
               </div>
               <div class="aval-runout-row">
-                <span class="aval-dot" style="background:#08519c"></span>
-                <span>50% probability</span>
+                <span class="aval-dot" style="background:#9ecae1"></span>
+                <span>5% probability</span>
               </div>
             </div>
           </div>
@@ -251,31 +252,6 @@
     <div id="slope-tip" class="hidden" role="tooltip"></div>
 
   </div>
-
-  <!-- SVG filters for NVE avalanche zone WMS tiles.
-       S3 and S2u tiles render zones as a pink stippled pattern on a transparent background.
-       feColorMatrix recolours the stipple dots to the target blue while preserving their alpha
-       exactly — no dilation so zone boundaries match the NVE data without any expansion.
-       S2m tiles render zones as solid light blue on a pink background; the B>R feColorMatrix
-       keeps blue zone pixels opaque and makes pink non-zone pixels fully transparent. -->
-  <svg id="pows-svg-filters" style="position:absolute;width:0;height:0" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <defs>
-      <!-- S3 largest zone → light blue #9ecae1 (5% probability / rare) -->
-      <filter id="aval-zone-s3" color-interpolation-filters="sRGB">
-        <feColorMatrix type="matrix" values="0 0 0 0 0.620  0 0 0 0 0.792  0 0 0 0 0.882  0 0 0 1 0"/>
-      </filter>
-      <!-- S2 no-forest zone → medium blue #3182bd (25% probability) -->
-      <filter id="aval-zone-s2u" color-interpolation-filters="sRGB">
-        <feColorMatrix type="matrix" values="0 0 0 0 0.192  0 0 0 0 0.510  0 0 0 0 0.741  0 0 0 1 0"/>
-      </filter>
-      <!-- S2 with-forest zone → dark blue #08519c (50% probability / frequent) -->
-      <!-- S2m tiles are solid-fill PNGs: blue zone pixels + pink non-zone background, both alpha=255.
-           B>R alpha formula (A'=8*(B-R)) keeps blue zone pixels opaque and discards pink background. -->
-      <filter id="aval-zone-s2m" color-interpolation-filters="sRGB">
-        <feColorMatrix type="matrix" values="0 0 0 0 0.031  0 0 0 0 0.318  0 0 0 0 0.612  -8 0 8 0 0"/>
-      </filter>
-    </defs>
-  </svg>
 
   <script src="leaflet.js"></script>
   <script src="maplibre-gl.js"></script>

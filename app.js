@@ -64,10 +64,10 @@ const TERRARIUM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{
 // Minimum zoom at which slope calculation is meaningful
 const MIN_SLOPE_ZOOM = 10;
 
-// NVE (Norwegian Water Resources and Energy Directorate) avalanche WMS services
-const NVE_BRATTHET_URL   = 'https://kart.nve.no/enterprise/services/Bratthet/MapServer/WMSServer';
-const NVE_AKTSOMHET_URL  = 'https://kart.nve.no/enterprise/services/SnoskredAktsomhet/MapServer/WMSServer';
-const NVE_ATTRIB       = '&copy; <a href="https://www.nve.no">NVE</a>';
+// NVE "Bratthet med utløp" — single pre-rendered WMTS tileset combining steepness
+// (colour-coded by angle) and avalanche runout zones. Same source as skimo.pro / Varsom.
+const NVE_BRATTHET_UTLOP_URL = 'https://gis3.nve.no/arcgis/rest/services/wmts/Bratthet_med_utlop_2024/MapServer/tile/{z}/{y}/{x}';
+const NVE_ATTRIB = '&copy; <a href="https://www.nve.no">NVE</a>';
 
 // Simple LRU-style tile data cache (raw RGBA arrays)
 const elevCache = new Map();
@@ -1065,42 +1065,21 @@ map.on('moveend', () => {
 
 /* ─── Avalanche zone overlays (NVE, Norway only) ─────────────────────── */
 
-// Steepness layer — NVE official yellow→orange→red colour scheme by degree
-const avalancheSteepLayer = L.tileLayer.wms(NVE_BRATTHET_URL, {
-  layers:      'Bratthet_snoskred',
-  format:      'image/png',
-  transparent: true,
-  opacity:     0.75,
+// Single pre-rendered WMTS tile layer: NVE "Bratthet med utløp 2024".
+// Steepness and runout zones are baked into the tiles — no WMS/SVG filters needed.
+const avalancheLayer = L.tileLayer(NVE_BRATTHET_UTLOP_URL, {
+  opacity:     0.85,
   attribution: NVE_ATTRIB,
   pane:        'overlayPane',
   zIndex:      410,
+  maxZoom:     18,
 });
-
-// 50% probability runout zone (S2m = with-forest, innermost zone).
-// S3 (5%) and S2u (25%) are temporarily disabled while we tune S2m to match skimo.pro.
-const _RUNOUT_LAYERS = [
-  { layer: L.tileLayer.wms(NVE_AKTSOMHET_URL, {
-      layers: 'S2_snoskred_m_skogeffekt_Aktsomhetsomrade',
-      format: 'image/png', transparent: true, opacity: 0.75,
-      attribution: NVE_ATTRIB, pane: 'overlayPane', zIndex: 409,
-    }), filter: 'url(#aval-zone-s2m)' },
-];
-
-const _avalancheLayers = [avalancheSteepLayer, ..._RUNOUT_LAYERS.map(r => r.layer)];
 
 const toggleAvalanche = document.getElementById('toggle-avalanche');
 
 function _applyAvalancheLayers() {
-  _avalancheLayers.forEach(l => {
-    if (state.avalancheActive) { if (!map.hasLayer(l)) l.addTo(map); }
-    else                       { if ( map.hasLayer(l)) map.removeLayer(l); }
-  });
-  if (state.avalancheActive) {
-    _RUNOUT_LAYERS.forEach(({ layer, filter }) => {
-      const c = layer.getContainer();
-      if (c) c.style.filter = filter;
-    });
-  }
+  if (state.avalancheActive) { if (!map.hasLayer(avalancheLayer)) avalancheLayer.addTo(map); }
+  else                       { if ( map.hasLayer(avalancheLayer)) map.removeLayer(avalancheLayer); }
 }
 
 toggleAvalanche.addEventListener('change', () => {
