@@ -1088,13 +1088,11 @@ const toggleAvalanche = document.getElementById('toggle-avalanche');
 function _applyAvalancheLayers() {
   if (state.avalancheActive) { if (!map.hasLayer(avalancheLayer)) avalancheLayer.addTo(map); }
   else                       { if ( map.hasLayer(avalancheLayer)) map.removeLayer(avalancheLayer); }
+  _apply3DAvalancheLayers();
 }
 
 toggleAvalanche.addEventListener('change', () => {
   state.avalancheActive = toggleAvalanche.checked;
-  if (state.avalancheActive && !map3dEl.classList.contains('hidden')) {
-    showToast('Avalanche terrain is shown in 2D view only');
-  }
   _applyAvalancheLayers();
 });
 
@@ -1126,13 +1124,11 @@ function _applyJpAvalancheLayers() {
     if (map.hasLayer(jpSlopeLayer))  map.removeLayer(jpSlopeLayer);
     if (map.hasLayer(jpHazardLayer)) map.removeLayer(jpHazardLayer);
   }
+  _apply3DAvalancheLayers();
 }
 
 toggleJpAvalanche.addEventListener('change', () => {
   state.jpAvalancheActive = toggleJpAvalanche.checked;
-  if (state.jpAvalancheActive && !map3dEl.classList.contains('hidden')) {
-    showToast('Avalanche terrain is shown in 2D view only');
-  }
   _applyJpAvalancheLayers();
 });
 
@@ -1640,9 +1636,42 @@ function build3DStyle() {
         encoding: 'terrarium',
         maxzoom: 14,
       },
+      'aval-nve': {
+        type: 'raster',
+        tiles: [NVE_BRATTHET_UTLOP_URL],
+        tileSize: 256,
+        maxzoom: 18,
+        attribution: NVE_ATTRIB,
+      },
+      'aval-jp-slope': {
+        type: 'raster',
+        tiles: [GSI_SLOPE_URL],
+        tileSize: 256,
+        maxzoom: 15,
+        attribution: GSI_ATTRIB,
+      },
+      'aval-jp-hazard': {
+        type: 'raster',
+        tiles: [GSI_HAZARD_URL],
+        tileSize: 256,
+        maxzoom: 17,
+        attribution: GSI_ATTRIB,
+      },
     },
-    layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+    layers: [
+      { id: 'basemap',        type: 'raster', source: 'basemap' },
+      { id: 'aval-nve',       type: 'raster', source: 'aval-nve',       paint: { 'raster-opacity': 0.85 }, layout: { visibility: 'none' } },
+      { id: 'aval-jp-slope',  type: 'raster', source: 'aval-jp-slope',  paint: { 'raster-opacity': 0.8  }, layout: { visibility: 'none' } },
+      { id: 'aval-jp-hazard', type: 'raster', source: 'aval-jp-hazard', paint: { 'raster-opacity': 0.8  }, layout: { visibility: 'none' } },
+    ],
   };
+}
+
+function _apply3DAvalancheLayers() {
+  if (!map3d || !map3d.isStyleLoaded()) return;
+  map3d.setLayoutProperty('aval-nve',       'visibility', state.avalancheActive   ? 'visible' : 'none');
+  map3d.setLayoutProperty('aval-jp-slope',  'visibility', state.jpAvalancheActive ? 'visible' : 'none');
+  map3d.setLayoutProperty('aval-jp-hazard', 'visibility', state.jpAvalancheActive ? 'visible' : 'none');
 }
 
 function init3D() {
@@ -1666,6 +1695,7 @@ function init3D() {
   // Enable terrain and register rotate listener once on initial style load
   map3d.once('load', () => {
     map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
+    _apply3DAvalancheLayers();
     if (_trackingOn && _lastPos) _update3DLocMarker();
     // Keep the direction arrow aligned when user two-finger rotates the 3D map
     map3d.on('rotate', () => {
@@ -1689,15 +1719,8 @@ btn3d.addEventListener('click', () => {
     map3dEl.classList.remove('hidden');
     btn3d.classList.add('active');
     btn3d.setAttribute('aria-pressed', 'true');
-    if (state.slopeActive)  showToast('Slope overlay is not shown in 3D view');
+    if (state.slopeActive) showToast('Slope overlay is not shown in 3D view');
     if (state.shadowActive && map.hasLayer(shadowLayer)) map.removeLayer(shadowLayer);
-    if (state.avalancheActive) {
-      if (map.hasLayer(avalancheLayer)) map.removeLayer(avalancheLayer);
-    }
-    if (state.jpAvalancheActive) {
-      if (map.hasLayer(jpSlopeLayer))  map.removeLayer(jpSlopeLayer);
-      if (map.hasLayer(jpHazardLayer)) map.removeLayer(jpHazardLayer);
-    }
     // Defer init/resize by one frame so the browser computes the container's
     // layout (clientWidth/clientHeight) before MapLibre reads it.
     requestAnimationFrame(() => {

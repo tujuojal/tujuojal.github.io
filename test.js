@@ -119,18 +119,28 @@ ok('_applyJpAvalancheLayers is defined',
    appSrc.includes('function _applyJpAvalancheLayers'));
 ok('_applyJpAvalancheLayers called on 3D→2D transition',
    appSrc.includes('_applyJpAvalancheLayers()'));
+ok('_apply3DAvalancheLayers is defined',
+   appSrc.includes('function _apply3DAvalancheLayers'));
+ok('_apply3DAvalancheLayers called from _applyAvalancheLayers',
+   appSrc.includes('_apply3DAvalancheLayers()'));
 
 /* ─── 7. 3D/2D transition cleanup ─────────────────────────────────────── */
 console.log('\n── 7. 3D transition layer cleanup ──');
 
-ok('Norway avalanche layer removed on 2D→3D',
+ok('Norway avalanche layer managed in 2D (add/remove)',
    appSrc.includes('map.removeLayer(avalancheLayer)'));
-ok('Japan slope layer removed on 2D→3D',
+ok('Japan slope layer managed in 2D (add/remove)',
    appSrc.includes('map.removeLayer(jpSlopeLayer)'));
-ok('Japan hazard layer removed on 2D→3D',
+ok('Japan hazard layer managed in 2D (add/remove)',
    appSrc.includes('map.removeLayer(jpHazardLayer)'));
 ok('Norway avalanche layer restored on 3D→2D',
    appSrc.includes('_applyAvalancheLayers()'));
+ok('3D avalanche overlay sources in build3DStyle',
+   appSrc.includes("'aval-nve'") && appSrc.includes("'aval-jp-slope'") && appSrc.includes("'aval-jp-hazard'"));
+ok('3D avalanche visibility toggled via setLayoutProperty',
+   appSrc.includes("setLayoutProperty('aval-nve'"));
+ok('_apply3DAvalancheLayers called on map3d load',
+   appSrc.includes('_apply3DAvalancheLayers()'));
 
 /* ─── 8. Location / direction arrow ──────────────────────────────────── */
 console.log('\n── 8. Location & direction arrow ──');
