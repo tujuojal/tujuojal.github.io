@@ -1120,8 +1120,9 @@ const _staticLocIcon = L.divIcon({
  *  rotation.  We subtract it so the total visual angle equals _deviceHead. */
 function _update2DArrow() {
   if (!_2dArrowEl) return;
-  if (_deviceHead === null) { _2dArrowEl.style.display = 'none'; return; }
-  const ang = ((_deviceHead - state.bearing) % 360 + 360) % 360;
+  const head = _deviceHead ?? _gpsHead;
+  if (head === null) { _2dArrowEl.style.display = 'none'; return; }
+  const ang = ((head - state.bearing) % 360 + 360) % 360;
   _2dArrowEl.setAttribute('transform', `rotate(${ang.toFixed(1)})`);
   _2dArrowEl.style.display = '';
 }
@@ -1137,6 +1138,7 @@ let _watchId        = null;   // geolocation watchPosition id
 let _orientHdlr     = null;   // absolute-event listener ref (stored for removeEventListener)
 let _orientRelHdlr  = null;   // relative-event listener ref (fallback for iOS)
 let _deviceHead   = null;   // current compass heading (degrees, or null)
+let _gpsHead      = null;   // GPS course heading fallback (degrees, or null)
 let _trackingOn   = false;
 let _firstFix     = true;
 
@@ -1197,8 +1199,9 @@ function _setup3DLocLayers() {
     _3dArrowMarker = new maplibregl.Marker({ element: el, anchor: 'center', pitchAlignment: 'viewport', rotationAlignment: 'viewport' })
       .setLngLat([_lastPos.lng, _lastPos.lat])
       .addTo(map3d);
-    if (_deviceHead !== null) {
-      const rot = ((_deviceHead - map3d.getBearing()) % 360 + 360) % 360;
+    const _initHead = _deviceHead ?? _gpsHead;
+    if (_initHead !== null) {
+      const rot = ((_initHead - map3d.getBearing()) % 360 + 360) % 360;
       el.style.opacity = '1';
       el.style.transform = `rotate(${rot.toFixed(1)}deg)`;
     }
@@ -1315,6 +1318,7 @@ function _stopTracking() {
   _2dArrowEl     = null;
   _remove3DLocMarker();
   _lastPos       = null;
+  _gpsHead       = null;
   _trackingOn    = false;
   _firstFix      = true;
   btnLocate.classList.remove('active');
@@ -1366,9 +1370,28 @@ btnLocate.addEventListener('click', async () => {
         }
       }
       _updateLocMarker(latlng, pos.coords.accuracy);
+
+      // GPS course heading: valid when moving (non-null, non-NaN).
+      // Used as arrow fallback when no compass sensor is available.
+      const gpsCourse = pos.coords.heading;
+      if (typeof gpsCourse === 'number' && !isNaN(gpsCourse)) {
+        _gpsHead = gpsCourse;
+        if (_deviceHead === null) {
+          _update2DArrow();
+          // 3D arrow
+          if (map3d && !map3dEl.classList.contains('hidden') && _3dLocActive && _3dArrowEl) {
+            const rot = ((_gpsHead - map3d.getBearing()) % 360 + 360) % 360;
+            _3dArrowEl.style.opacity = '1';
+            _3dArrowEl.style.transform = `rotate(${rot.toFixed(1)}deg)`;
+          }
+        }
+      }
     },
     err => {
-      showToast('Could not get location: ' + err.message);
+      const msg = err.code === 1 ? 'Location access denied — allow it in browser settings'
+                : err.code === 2 ? 'Location unavailable'
+                : 'Location timed out';
+      showToast(msg);
       _stopTracking();
     },
     { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 },
