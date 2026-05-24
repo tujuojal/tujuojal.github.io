@@ -1190,20 +1190,25 @@ function _setup3DLocLayers() {
   // Direction arrow: HTML Marker with inline SVG, rotated via CSS transform.
   // This avoids all addImage/loadImage reliability issues in MapLibre 4.x.
   if (!_3dArrowMarker) {
+    // Outer div: MapLibre sets transform on this for positioning — do NOT touch it.
     const el = document.createElement('div');
-    el.style.cssText = 'pointer-events:none;opacity:0;transform-origin:center center;';
-    el.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="-16 -16 32 32">' +
+    el.style.cssText = 'pointer-events:none;';
+    // Inner div: we rotate this independently.
+    const inner = document.createElement('div');
+    inner.style.cssText = 'opacity:0;transform-origin:center center;';
+    inner.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="-16 -16 32 32">' +
       '<path d="M0,-13 L-7,9 L0,4 L7,9 Z" fill="#4fc3f7" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>' +
       '</svg>';
-    _3dArrowEl = el;
+    el.appendChild(inner);
+    _3dArrowEl = inner;
     _3dArrowMarker = new maplibregl.Marker({ element: el, anchor: 'center', pitchAlignment: 'viewport', rotationAlignment: 'viewport' })
       .setLngLat([_lastPos.lng, _lastPos.lat])
       .addTo(map3d);
     const _initHead = _deviceHead ?? _gpsHead;
     if (_initHead !== null) {
       const rot = ((_initHead - map3d.getBearing()) % 360 + 360) % 360;
-      el.style.opacity = '1';
-      el.style.transform = `rotate(${rot.toFixed(1)}deg)`;
+      inner.style.opacity = '1';
+      inner.style.transform = `rotate(${rot.toFixed(1)}deg)`;
     }
   }
 }
