@@ -672,7 +672,7 @@ function getElev(data, px, py) {
 /* ─── Slope layer instance ───────────────────────────────────────────── */
 
 const slopeLayer = new SlopeLayer({
-  opacity: 0.75,
+  opacity: 0.65,
   maxZoom: 18,
   pane: 'overlayPane',
   zIndex: 400,
@@ -1079,7 +1079,7 @@ map.on('moveend', () => {
 // Single pre-rendered WMTS tile layer: NVE "Bratthet med utløp 2024".
 // Steepness and runout zones are baked into the tiles — no WMS/SVG filters needed.
 const avalancheLayer = L.tileLayer(NVE_BRATTHET_UTLOP_URL, {
-  opacity:     0.85,
+  opacity:     0.7,
   attribution: NVE_ATTRIB,
   pane:        'overlayPane',
   zIndex:      410,
@@ -1102,7 +1102,7 @@ toggleAvalanche.addEventListener('change', () => {
 /* ─── Avalanche zone overlays (GSI, Japan only) ──────────────────────── */
 
 const jpSlopeLayer = L.tileLayer(GSI_SLOPE_URL, {
-  opacity:     0.8,
+  opacity:     0.7,
   attribution: GSI_ATTRIB,
   pane:        'overlayPane',
   zIndex:      411,
@@ -1110,7 +1110,7 @@ const jpSlopeLayer = L.tileLayer(GSI_SLOPE_URL, {
 });
 
 const jpHazardLayer = L.tileLayer(GSI_HAZARD_URL, {
-  opacity:     0.8,
+  opacity:     0.7,
   attribution: GSI_ATTRIB,
   pane:        'overlayPane',
   zIndex:      412,
@@ -1670,10 +1670,10 @@ function build3DStyle() {
     },
     layers: [
       { id: 'basemap',        type: 'raster', source: 'basemap' },
-      { id: 'aval-nve',       type: 'raster', source: 'aval-nve',       paint: { 'raster-opacity': 0.85 }, layout: { visibility: 'none' } },
-      { id: 'aval-jp-slope',  type: 'raster', source: 'aval-jp-slope',  paint: { 'raster-opacity': 0.8  }, layout: { visibility: 'none' } },
-      { id: 'aval-jp-hazard', type: 'raster', source: 'aval-jp-hazard', paint: { 'raster-opacity': 0.8  }, layout: { visibility: 'none' } },
-      { id: 'slope-3d',       type: 'raster', source: 'slope-3d',       paint: { 'raster-opacity': 0.75 }, layout: { visibility: 'none' } },
+      { id: 'aval-nve',       type: 'raster', source: 'aval-nve',       paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
+      { id: 'aval-jp-slope',  type: 'raster', source: 'aval-jp-slope',  paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
+      { id: 'aval-jp-hazard', type: 'raster', source: 'aval-jp-hazard', paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
+      { id: 'slope-3d',       type: 'raster', source: 'slope-3d',       paint: { 'raster-opacity': 0.65 }, layout: { visibility: 'none' } },
     ],
   };
 }
@@ -1734,7 +1734,7 @@ function _refresh3DSlopeSource() {
     map3d.removeLayer('slope-3d');
     map3d.removeSource('slope-3d');
     map3d.addSource('slope-3d', { type: 'raster', tiles: [_slope3dTiles()], tileSize: 256, maxzoom: 18 });
-    map3d.addLayer({ id: 'slope-3d', type: 'raster', source: 'slope-3d', paint: { 'raster-opacity': 0.75 }, layout: { visibility: vis } });
+    map3d.addLayer({ id: 'slope-3d', type: 'raster', source: 'slope-3d', paint: { 'raster-opacity': 0.65 }, layout: { visibility: vis } });
   }
 }
 
