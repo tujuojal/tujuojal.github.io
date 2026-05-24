@@ -74,7 +74,7 @@ const NVE_ATTRIB = '&copy; <a href="https://www.nve.no">NVE</a>';
 // nadarekikenkasyo: designated avalanche hazard locations (16 prefectures)
 const GSI_SLOPE_URL  = 'https://cyberjapandata.gsi.go.jp/xyz/slopezone1map/{z}/{x}/{y}.png';
 const GSI_HAZARD_URL = 'https://disaportaldata.gsi.go.jp/raster/05_nadarekikenkasyo/{z}/{x}/{y}.png';
-const GSI_ATTRIB     = '&copy; <a href="https://www.gsi.go.jp">GSI Japan</a>';
+// Attribution reuses GSI_ATTRIB defined above with the base map constants.
 
 // Simple LRU-style tile data cache (raw RGBA arrays)
 const elevCache = new Map();
