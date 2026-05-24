@@ -69,6 +69,13 @@ const MIN_SLOPE_ZOOM = 10;
 const NVE_BRATTHET_UTLOP_URL = 'https://gis3.nve.no/arcgis/rest/services/wmts/Bratthet_med_utlop_2024/MapServer/tile/{z}/{y}/{x}';
 const NVE_ATTRIB = '&copy; <a href="https://www.nve.no">NVE</a>';
 
+// GSI Japan avalanche layers (disaportal.gsi.go.jp / cyberjapandata.gsi.go.jp)
+// slopezone1map: slope-angle classification created for avalanche risk assessment (GSI, 2017)
+// nadarekikenkasyo: designated avalanche hazard locations (16 prefectures)
+const GSI_SLOPE_URL  = 'https://cyberjapandata.gsi.go.jp/xyz/slopezone1map/{z}/{x}/{y}.png';
+const GSI_HAZARD_URL = 'https://disaportaldata.gsi.go.jp/raster/05_nadarekikenkasyo/{z}/{x}/{y}.png';
+const GSI_ATTRIB     = '&copy; <a href="https://www.gsi.go.jp">GSI Japan</a>';
+
 // Simple LRU-style tile data cache (raw RGBA arrays)
 const elevCache = new Map();
 const wcsCache  = new Map();
@@ -89,7 +96,8 @@ const state = {
   shadowActive:       false,
   shadowDate:         new Date(),
   shadowSun:          { azimuth: 180, altitude: 45 }, // updated by updateShadow()
-  avalancheActive: false,
+  avalancheActive:   false,
+  jpAvalancheActive: false,
 };
 
 /* ─── Map setup ─────────────────────────────────────────────────────── */
@@ -1090,6 +1098,44 @@ toggleAvalanche.addEventListener('change', () => {
   _applyAvalancheLayers();
 });
 
+/* ─── Avalanche zone overlays (GSI, Japan only) ──────────────────────── */
+
+const jpSlopeLayer = L.tileLayer(GSI_SLOPE_URL, {
+  opacity:     0.8,
+  attribution: GSI_ATTRIB,
+  pane:        'overlayPane',
+  zIndex:      411,
+  maxZoom:     15,
+});
+
+const jpHazardLayer = L.tileLayer(GSI_HAZARD_URL, {
+  opacity:     0.8,
+  attribution: GSI_ATTRIB,
+  pane:        'overlayPane',
+  zIndex:      412,
+  maxZoom:     17,
+});
+
+const toggleJpAvalanche = document.getElementById('toggle-jp-avalanche');
+
+function _applyJpAvalancheLayers() {
+  if (state.jpAvalancheActive) {
+    if (!map.hasLayer(jpSlopeLayer))  jpSlopeLayer.addTo(map);
+    if (!map.hasLayer(jpHazardLayer)) jpHazardLayer.addTo(map);
+  } else {
+    if (map.hasLayer(jpSlopeLayer))  map.removeLayer(jpSlopeLayer);
+    if (map.hasLayer(jpHazardLayer)) map.removeLayer(jpHazardLayer);
+  }
+}
+
+toggleJpAvalanche.addEventListener('change', () => {
+  state.jpAvalancheActive = toggleJpAvalanche.checked;
+  if (state.jpAvalancheActive && !map3dEl.classList.contains('hidden')) {
+    showToast('Avalanche terrain is shown in 2D view only');
+  }
+  _applyJpAvalancheLayers();
+});
+
 // Geolocation + device heading
 const btnLocate = document.getElementById('btn-locate');
 
@@ -1646,7 +1692,11 @@ btn3d.addEventListener('click', () => {
     if (state.slopeActive)  showToast('Slope overlay is not shown in 3D view');
     if (state.shadowActive && map.hasLayer(shadowLayer)) map.removeLayer(shadowLayer);
     if (state.avalancheActive) {
-      _avalancheLayers.forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
+      if (map.hasLayer(avalancheLayer)) map.removeLayer(avalancheLayer);
+    }
+    if (state.jpAvalancheActive) {
+      if (map.hasLayer(jpSlopeLayer))  map.removeLayer(jpSlopeLayer);
+      if (map.hasLayer(jpHazardLayer)) map.removeLayer(jpHazardLayer);
     }
     // Defer init/resize by one frame so the browser computes the container's
     // layout (clientWidth/clientHeight) before MapLibre reads it.
@@ -1677,6 +1727,7 @@ btn3d.addEventListener('click', () => {
       shadowLayer.addTo(map);
       updateShadow();
     }
-    if (state.avalancheActive) _applyAvalancheLayers();
+    if (state.avalancheActive)   _applyAvalancheLayers();
+    if (state.jpAvalancheActive) _applyJpAvalancheLayers();
   }
 });

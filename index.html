@@ -206,6 +206,47 @@
 
         <div class="divider"></div>
 
+        <!-- Japan avalanche terrain overlay -->
+        <div class="control-row">
+          <div class="control-label">
+            <span class="label-text">Avalanche Terrain</span>
+            <span class="label-sub">GSI slope zones &amp; hazard locations · Japan only</span>
+          </div>
+          <label class="toggle" aria-label="Toggle Japan avalanche terrain overlay">
+            <input type="checkbox" id="toggle-jp-avalanche">
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+
+        <div id="jp-avalanche-controls" class="control-section">
+          <div class="aval-legend-group">
+            <div class="aval-legend-title">Slope zones (slopezone1map)</div>
+            <div class="aval-runout-rows">
+              <div class="aval-runout-row">
+                <span class="aval-dot" style="background:#d73027"></span>
+                <span>Steep avalanche-risk slopes</span>
+              </div>
+              <div class="aval-runout-row">
+                <span class="aval-dot" style="background:#fee08b"></span>
+                <span>Moderate risk slopes</span>
+              </div>
+            </div>
+          </div>
+          <div class="aval-legend-group">
+            <div class="aval-legend-title">Hazard locations (nadarekikenkasyo)</div>
+            <div class="aval-runout-rows">
+              <div class="aval-runout-row">
+                <span class="aval-dot" style="background:#9b59b6"></span>
+                <span>Designated avalanche danger zones</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
         <!-- Base map selector -->
         <div class="control-row">
           <div class="control-label">
