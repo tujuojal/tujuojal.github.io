@@ -713,6 +713,7 @@ function redrawSlope() {
       elevCache.clear();
       wcsCache.clear();
       slopeLayer.redraw();
+      _refresh3DSlopeSource();
     }
   }, 250);
 }
@@ -779,7 +780,8 @@ const zoomHint = document.getElementById('zoom-hint');
 
 function updateZoomHint() {
   const in3D = !map3dEl.classList.contains('hidden');
-  if (!in3D && state.slopeActive && map.getZoom() < MIN_SLOPE_ZOOM) {
+  const zoom = in3D ? (map3d ? map3d.getZoom() : 0) : map.getZoom();
+  if (state.slopeActive && zoom < MIN_SLOPE_ZOOM) {
     zoomHint.classList.remove('hidden');
   } else {
     zoomHint.classList.add('hidden');
@@ -849,6 +851,7 @@ toggleSlope.addEventListener('change', () => {
     slopeLayer.remove();
   }
 
+  _apply3DSlopeLayer();
   updateZoomHint();
 });
 
@@ -1627,6 +1630,7 @@ function build3DStyle() {
 
   return {
     version: 8,
+    terrain: { source: 'terrain-dem', exaggeration: 1.5 },
     sources: {
       basemap: { type: 'raster', tiles, tileSize: 256, attribution },
       'terrain-dem': {
@@ -1657,14 +1661,81 @@ function build3DStyle() {
         maxzoom: 17,
         attribution: GSI_ATTRIB,
       },
+      'slope-3d': {
+        type: 'raster',
+        tiles: [_slope3dTiles()],
+        tileSize: 256,
+        maxzoom: 18,
+      },
     },
     layers: [
       { id: 'basemap',        type: 'raster', source: 'basemap' },
       { id: 'aval-nve',       type: 'raster', source: 'aval-nve',       paint: { 'raster-opacity': 0.85 }, layout: { visibility: 'none' } },
       { id: 'aval-jp-slope',  type: 'raster', source: 'aval-jp-slope',  paint: { 'raster-opacity': 0.8  }, layout: { visibility: 'none' } },
       { id: 'aval-jp-hazard', type: 'raster', source: 'aval-jp-hazard', paint: { 'raster-opacity': 0.8  }, layout: { visibility: 'none' } },
+      { id: 'slope-3d',       type: 'raster', source: 'slope-3d',       paint: { 'raster-opacity': 0.75 }, layout: { visibility: 'none' } },
     ],
   };
+}
+
+// ── 3D slope protocol ────────────────────────────────────────────────────
+// Version counter embedded in tile URL so changing slope range busts
+// MapLibre's internal tile cache (new URL → new fetch).
+let _slope3dVer = 1;
+let _slope3dProtocolRegistered = false;
+
+function _slope3dTiles() {
+  return `slope://v${_slope3dVer}/{z}/{x}/{y}`;
+}
+
+function _registerSlopeProtocol() {
+  if (_slope3dProtocolRegistered || typeof maplibregl.addProtocol !== 'function') return;
+  _slope3dProtocolRegistered = true;
+
+  maplibregl.addProtocol('slope', async (params, abortController) => {
+    const parts = params.url.replace('slope://', '').split('/');
+    // parts: ['v<N>', z, x, y]
+    const z = parseInt(parts[1]);
+    const x = parseInt(parts[2]);
+    const y = parseInt(parts[3]);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 256;
+    await slopeLayer._renderSlopeTile({ x, y, z }, canvas);
+
+    return new Promise((resolve, reject) => {
+      if (abortController && abortController.signal.aborted) {
+        reject(new Error('aborted'));
+        return;
+      }
+      canvas.toBlob(blob => {
+        if (!blob) { reject(new Error('slope toBlob failed')); return; }
+        blob.arrayBuffer().then(buf => resolve({ data: buf })).catch(reject);
+      }, 'image/png');
+    });
+  });
+}
+
+function _apply3DSlopeLayer() {
+  if (!map3d || !map3d.isStyleLoaded()) return;
+  map3d.setLayoutProperty('slope-3d', 'visibility', state.slopeActive ? 'visible' : 'none');
+}
+
+function _refresh3DSlopeSource() {
+  if (!map3d || !map3d.isStyleLoaded()) return;
+  _slope3dVer++;
+  const src = map3d.getSource('slope-3d');
+  if (!src) return;
+  if (typeof src.setTiles === 'function') {
+    src.setTiles([_slope3dTiles()]);
+  } else {
+    // Fallback for older MapLibre: remove and re-add source + layer
+    const vis = map3d.getLayoutProperty('slope-3d', 'visibility');
+    map3d.removeLayer('slope-3d');
+    map3d.removeSource('slope-3d');
+    map3d.addSource('slope-3d', { type: 'raster', tiles: [_slope3dTiles()], tileSize: 256, maxzoom: 18 });
+    map3d.addLayer({ id: 'slope-3d', type: 'raster', source: 'slope-3d', paint: { 'raster-opacity': 0.75 }, layout: { visibility: vis } });
+  }
 }
 
 function _apply3DAvalancheLayers() {
@@ -1676,6 +1747,8 @@ function _apply3DAvalancheLayers() {
 
 function init3D() {
   if (map3d) return;
+
+  _registerSlopeProtocol();
 
   const center = map.getCenter();
 
@@ -1694,9 +1767,10 @@ function init3D() {
 
   // Enable terrain and register rotate listener once on initial style load
   map3d.once('load', () => {
-    map3d.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
     _apply3DAvalancheLayers();
+    _apply3DSlopeLayer();
     if (_trackingOn && _lastPos) _update3DLocMarker();
+    map3d.on('zoomend', updateZoomHint);
     // Keep the direction arrow aligned when user two-finger rotates the 3D map
     map3d.on('rotate', () => {
       if (_3dArrowEl && _deviceHead !== null) {
@@ -1719,7 +1793,6 @@ btn3d.addEventListener('click', () => {
     map3dEl.classList.remove('hidden');
     btn3d.classList.add('active');
     btn3d.setAttribute('aria-pressed', 'true');
-    if (state.slopeActive) showToast('Slope overlay is not shown in 3D view');
     if (state.shadowActive && map.hasLayer(shadowLayer)) map.removeLayer(shadowLayer);
     // Defer init/resize by one frame so the browser computes the container's
     // layout (clientWidth/clientHeight) before MapLibre reads it.

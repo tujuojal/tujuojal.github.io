@@ -141,6 +141,24 @@ ok('3D avalanche visibility toggled via setLayoutProperty',
    appSrc.includes("setLayoutProperty('aval-nve'"));
 ok('_apply3DAvalancheLayers called on map3d load',
    appSrc.includes('_apply3DAvalancheLayers()'));
+ok('slope-3d source in build3DStyle',
+   appSrc.includes("'slope-3d'"));
+ok('slope protocol registered (_registerSlopeProtocol)',
+   appSrc.includes('_registerSlopeProtocol'));
+ok('_apply3DSlopeLayer is defined',
+   appSrc.includes('function _apply3DSlopeLayer'));
+ok('_refresh3DSlopeSource is defined',
+   appSrc.includes('function _refresh3DSlopeSource'));
+ok('_refresh3DSlopeSource called from redrawSlope',
+   appSrc.includes('_refresh3DSlopeSource()'));
+ok('_apply3DSlopeLayer called from toggleSlope handler',
+   appSrc.includes('_apply3DSlopeLayer()'));
+ok('_apply3DSlopeLayer called on map3d load',
+   appSrc.includes('_apply3DSlopeLayer()'));
+ok('No slope-only 3D toast remaining',
+   !appSrc.includes("'Slope overlay is not shown in 3D view'"));
+ok('Terrain in initial 3D style (not via setTerrain after load)',
+   appSrc.includes("terrain: { source: 'terrain-dem'") && !appSrc.includes('map3d.setTerrain('));
 
 /* ─── 8. Location / direction arrow ──────────────────────────────────── */
 console.log('\n── 8. Location & direction arrow ──');
