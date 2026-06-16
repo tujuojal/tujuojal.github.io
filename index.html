@@ -156,6 +156,38 @@
 
         <div class="divider"></div>
 
+        <!-- Rider heatmap overlay -->
+        <div class="control-row">
+          <div class="control-label">
+            <span class="label-text">Rider Heatmap</span>
+            <span class="label-sub">Ski track density from user data</span>
+          </div>
+          <label class="toggle" aria-label="Toggle rider heatmap overlay">
+            <input type="checkbox" id="toggle-heatmap">
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+
+        <div id="heatmap-controls" class="control-section disabled">
+          <div class="aval-legend-group">
+            <div class="aval-legend-title">Track Density</div>
+            <div class="aval-steep-scale">
+              <span class="aval-steep-seg" style="background:#0095ED"></span>
+              <span class="aval-steep-seg" style="background:#00C853"></span>
+              <span class="aval-steep-seg" style="background:#FFEB3B"></span>
+              <span class="aval-steep-seg" style="background:#FF6D00"></span>
+              <span class="aval-steep-seg" style="background:#D32F2F"></span>
+            </div>
+            <div class="aval-steep-labels">
+              <span>Low</span><span></span><span>Medium</span><span></span><span>High</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
         <!-- Avalanche terrain overlay -->
         <div class="control-row">
           <div class="control-label">
