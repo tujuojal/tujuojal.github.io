@@ -592,13 +592,15 @@ const SkiTrackHeatmap = L.GridLayer.extend({
    *  previously-fetched area (with a margin). Debounced & de-duplicated. */
   _maybeFetch() {
     if (!this._map) return;
-    if (this._map.getZoom() < MIN_HEATMAP_ZOOM) {
+    const zoom = this._map.getZoom();
+    if (zoom < MIN_HEATMAP_ZOOM) {
       // Clear cached bounds when zooming out below minimum, so data refetches
       // when zooming back in (preventing stale data from different locations).
       this._fetchedBounds = null;
       return;
     }
     const b = this._map.getBounds();
+    if (!b || !b.isValid()) return;  // Guard against invalid bounds
     if (this._fetchedBounds && this._fetchedBounds.contains(b)) return;
     clearTimeout(this._fetchTimer);
     this._fetchTimer = setTimeout(() => this._fetch(b.pad(0.4)), 300);
