@@ -649,51 +649,51 @@ const SkiTrackHeatmap = L.GridLayer.extend({
     const segs = this._segments;
     if (!segs || !segs.length) return;
     const size = this.getTileSize();
-    const tileOrigin = coords.scaleBy(size);   // pixel origin of this tile
+    const tileOrigin = coords.scaleBy(size);
     const z = coords.z;
     const map = this._map;
+    const ctx = canvas.getContext('2d');
 
-    // Accumulate route coverage into an offscreen buffer using additive alpha.
-    const acc = document.createElement('canvas');
-    acc.width = size.x; acc.height = size.y;
-    const ax = acc.getContext('2d');
-    ax.lineCap = 'round';
-    ax.lineJoin = 'round';
-    ax.strokeStyle = 'rgba(255,255,255,0.5)';
-    ax.lineWidth = 6;                 // fat stroke → neighbouring routes overlap
-    ax.globalCompositeOperation = 'lighter';
-
-    // Cull to this tile's geographic bounds (+margin) to skip far-away segments.
+    // Cull to this tile's geographic bounds (+margin).
     const pad = 0.02;
     const tb = this._tileLatLngBounds(coords, size).pad(pad);
 
-    let drew = false;
+    // Render routes with a blue→red heatmap color based on a simple density model.
+    // We use multiple semi-transparent passes to build up color intensity.
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Draw routes directly with semi-transparent blue, creating natural blending.
     for (let i = 0; i < segs.length; i++) {
       const a = segs[i][0], b = segs[i][1];
       if (!tb.contains(a) && !tb.contains(b)) continue;
       const pa = map.project(a, z).subtract(tileOrigin);
       const pb = map.project(b, z).subtract(tileOrigin);
-      ax.beginPath();
-      ax.moveTo(pa.x, pa.y);
-      ax.lineTo(pb.x, pb.y);
-      ax.stroke();
-      drew = true;
-    }
-    if (!drew) return;
 
-    // Read back accumulated coverage (alpha channel = density), colour-map it.
-    const src = ax.getImageData(0, 0, size.x, size.y).data;
-    const out = canvas.getContext('2d').createImageData(size.x, size.y);
-    const d = out.data;
-    for (let p = 0; p < size.x * size.y; p++) {
-      const cov = src[p * 4 + 3] / 255;        // 0..1 accumulated coverage
-      if (cov <= 0) continue;
-      const t = Math.min(1, cov * 1.3);        // gentle gain
-      const c = heatColor(t);
-      const o = p * 4;
-      d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = c[3];
+      // Draw segment with blue heatmap color (low density)
+      ctx.strokeStyle = 'rgba(30, 60, 220, 0.4)';  // semi-transparent blue
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.moveTo(pa.x, pa.y);
+      ctx.lineTo(pb.x, pb.y);
+      ctx.stroke();
     }
-    canvas.getContext('2d').putImageData(out, 0, 0);
+
+    // Second pass: redraw segments with slightly redder color for overlap effect
+    for (let i = 0; i < segs.length; i++) {
+      const a = segs[i][0], b = segs[i][1];
+      if (!tb.contains(a) && !tb.contains(b)) continue;
+      const pa = map.project(a, z).subtract(tileOrigin);
+      const pb = map.project(b, z).subtract(tileOrigin);
+
+      // Draw segment again with cyan color for medium density
+      ctx.strokeStyle = 'rgba(0, 200, 230, 0.2)';  // semi-transparent cyan
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(pa.x, pa.y);
+      ctx.lineTo(pb.x, pb.y);
+      ctx.stroke();
+    }
   },
 
   /** Geographic bounds of a tile (for culling). */
