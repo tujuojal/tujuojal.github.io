@@ -64,14 +64,11 @@ const TERRARIUM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{
 // Minimum zoom at which slope calculation is meaningful
 const MIN_SLOPE_ZOOM = 10;
 
-// Ski-track heatmap: ski-route geometry comes live from the OpenStreetMap
-// Overpass API (CORS-enabled, no key). We rasterise the returned polylines into
-// a blue→red density overlay client-side. Overpass is heavy at low zoom, so the
-// layer only queries at MIN_HEATMAP_ZOOM+.
-const OVERPASS_URL    = 'https://overpass-api.de/api/interpreter';
-const MIN_HEATMAP_ZOOM = 9;
-const OSM_HEATMAP_ATTRIB =
-  'Ski routes &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (ODbL)';
+// Strava Global Heatmap: user activity density from Strava app users worldwide.
+// Uses public tile URLs without authentication (limited to zoom level 12).
+// Shows where skiers/snowboarders actually go based on aggregated user activities.
+const STRAVA_HEATMAP_URL = 'https://heatmap-external-b.strava.com/tiles/all/hot/{z}/{x}/{y}.png';
+const STRAVA_ATTRIB = 'Activity density &copy; <a href="https://www.strava.com">Strava</a>';
 
 // NVE "Bratthet med utløp" — single pre-rendered WMTS tileset combining steepness
 // (colour-coded by angle) and avalanche runout zones. Same source as skimo.pro / Varsom.
@@ -555,181 +552,12 @@ function heatColor(t) {
   return [r, g, b, a];
 }
 
-/**
- * SkiTrackHeatmap renders a density heatmap of mapped ski routes.
- *
- * Data: `route=ski` ways/relations and `piste:type` ways fetched live from the
- * OpenStreetMap Overpass API for the current view (CORS-enabled, no key, ODbL).
- * Rendering: each polyline is stroked into a per-tile accumulation buffer with
- * additive blending; overlapping/nearby routes build up density, which is then
- * blurred and mapped through heatColor() → a real blue→red heatmap.
- *
- * Note: this shows where ski routes are *mapped* (the open, embeddable stand-in
- * for proprietary GPS-rider heatmaps like Strava's), hotter where routes
- * concentrate. Source of truth for the data is OSM.
- */
-const SkiTrackHeatmap = L.GridLayer.extend({
+/* ─── Strava Heatmap Layer ─────────────────────────────────────────────── */
 
-  initialize(options) {
-    L.GridLayer.prototype.initialize.call(this, options);
-    this._segments = [];      // [[latlng, latlng], ...] flattened route segments
-    this._fetchedBounds = null;
-    this._fetching = false;
-  },
-
-  onAdd(map) {
-    L.GridLayer.prototype.onAdd.call(this, map);
-    this._map.on('moveend', this._maybeFetch, this);
-    this._maybeFetch();
-  },
-
-  onRemove(map) {
-    map.off('moveend', this._maybeFetch, this);
-    L.GridLayer.prototype.onRemove.call(this, map);
-  },
-
-  /** Fetch ski-route geometry for the current view if we've moved out of the
-   *  previously-fetched area (with a margin). Debounced & de-duplicated. */
-  _maybeFetch() {
-    if (!this._map) return;
-    if (this._map.getZoom() < MIN_HEATMAP_ZOOM) return;
-    const b = this._map.getBounds();
-    if (this._fetchedBounds && this._fetchedBounds.contains(b)) return;
-    clearTimeout(this._fetchTimer);
-    this._fetchTimer = setTimeout(() => this._fetch(b.pad(0.4)), 300);
-  },
-
-  async _fetch(bounds) {
-    if (this._fetching) return;
-    this._fetching = true;
-    startLoading();
-    const s = bounds.getSouth(), w = bounds.getWest(),
-          n = bounds.getNorth(), e = bounds.getEast();
-    const bbox = `${s},${w},${n},${e}`;
-    const query =
-      `[out:json][timeout:25];` +
-      `(way["piste:type"](${bbox});` +
-      ` way["route"="ski"](${bbox});` +
-      ` relation["route"="ski"](${bbox}););` +
-      `out geom;`;
-    try {
-      const resp = await fetch(OVERPASS_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'data=' + encodeURIComponent(query),
-      });
-      if (!resp.ok) throw new Error('Overpass HTTP ' + resp.status);
-      const json = await resp.json();
-      this._segments = parseOverpassSegments(json);
-      this._fetchedBounds = bounds;
-      this.redraw();
-    } catch (err) {
-      console.warn('Ski-route fetch failed', err);
-      showToast('Could not load ski routes (network/Overpass busy)');
-    } finally {
-      this._fetching = false;
-      stopLoading();
-    }
-  },
-
-  createTile(coords, done) {
-    const canvas = document.createElement('canvas');
-    const size = this.getTileSize();
-    canvas.width = size.x;
-    canvas.height = size.y;
-    // Render async so done() can report completion to the loading counter.
-    setTimeout(() => {
-      try { this._renderTile(coords, canvas); done(null, canvas); }
-      catch (err) { done(err, canvas); }
-    }, 0);
-    return canvas;
-  },
-
-  _renderTile(coords, canvas) {
-    const segs = this._segments;
-    if (!segs || !segs.length) return;
-    const size = this.getTileSize();
-    const tileOrigin = coords.scaleBy(size);
-    const z = coords.z;
-    const map = this._map;
-    const ctx = canvas.getContext('2d');
-
-    // Cull to this tile's geographic bounds (+margin).
-    const pad = 0.02;
-    const tb = this._tileLatLngBounds(coords, size).pad(pad);
-
-    // Render routes with a blue→red heatmap color based on a simple density model.
-    // We use multiple semi-transparent passes to build up color intensity.
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    // Draw routes directly with semi-transparent blue, creating natural blending.
-    for (let i = 0; i < segs.length; i++) {
-      const a = segs[i][0], b = segs[i][1];
-      if (!tb.contains(a) && !tb.contains(b)) continue;
-      const pa = map.project(a, z).subtract(tileOrigin);
-      const pb = map.project(b, z).subtract(tileOrigin);
-
-      // Draw segment with blue heatmap color (low density)
-      ctx.strokeStyle = 'rgba(30, 60, 220, 0.4)';  // semi-transparent blue
-      ctx.lineWidth = 8;
-      ctx.beginPath();
-      ctx.moveTo(pa.x, pa.y);
-      ctx.lineTo(pb.x, pb.y);
-      ctx.stroke();
-    }
-
-    // Second pass: redraw segments with slightly redder color for overlap effect
-    for (let i = 0; i < segs.length; i++) {
-      const a = segs[i][0], b = segs[i][1];
-      if (!tb.contains(a) && !tb.contains(b)) continue;
-      const pa = map.project(a, z).subtract(tileOrigin);
-      const pb = map.project(b, z).subtract(tileOrigin);
-
-      // Draw segment again with cyan color for medium density
-      ctx.strokeStyle = 'rgba(0, 200, 230, 0.2)';  // semi-transparent cyan
-      ctx.lineWidth = 6;
-      ctx.beginPath();
-      ctx.moveTo(pa.x, pa.y);
-      ctx.lineTo(pb.x, pb.y);
-      ctx.stroke();
-    }
-  },
-
-  /** Geographic bounds of a tile (for culling). */
-  _tileLatLngBounds(coords, size) {
-    const map = this._map, z = coords.z;
-    const nw = map.unproject(coords.scaleBy(size), z);
-    const se = map.unproject(L.point(coords.x + 1, coords.y + 1).scaleBy(size), z);
-    return L.latLngBounds(nw, se);
-  },
-});
-
-/** Flatten an Overpass `out geom;` response into [latlng, latlng] segments. */
-function parseOverpassSegments(json) {
-  const segs = [];
-  const els = (json && json.elements) || [];
-  for (const el of els) {
-    // ways carry .geometry; relations carry .members[].geometry
-    const geoms = el.geometry ? [el.geometry]
-                : el.members ? el.members.map(m => m.geometry).filter(Boolean)
-                : [];
-    for (const g of geoms) {
-      for (let i = 0; i + 1 < g.length; i++) {
-        segs.push([
-          L.latLng(g[i].lat, g[i].lon),
-          L.latLng(g[i + 1].lat, g[i + 1].lon),
-        ]);
-      }
-    }
-  }
-  return segs;
-}
-
-const skiTrackHeatmap = new SkiTrackHeatmap({
-  attribution: OSM_HEATMAP_ATTRIB,
-  opacity: 0.7,
-  maxZoom: 18,
+const stravaHeatmap = L.tileLayer(STRAVA_HEATMAP_URL, {
+  attribution: STRAVA_ATTRIB,
+  opacity: 0.6,
+  maxZoom: 12,
   pane: 'overlayPane',
   zIndex: 401,
 });
@@ -899,7 +727,7 @@ const slopeLayer = new SlopeLayer({
   zIndex: 400,
 });
 
-const heatmapLayer = skiTrackHeatmap;
+const heatmapLayer = stravaHeatmap;
 
 /* ─── Shadow (hillshade) layer ───────────────────────────────────────── */
 
