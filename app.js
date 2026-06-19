@@ -600,7 +600,7 @@ const SkiTrackHeatmap = L.GridLayer.extend({
       return;
     }
     const b = this._map.getBounds();
-    if (!b || !b.isValid()) return;  // Guard against invalid bounds
+    if (!b) return;  // Guard against invalid bounds
     if (this._fetchedBounds && this._fetchedBounds.contains(b)) return;
     clearTimeout(this._fetchTimer);
     this._fetchTimer = setTimeout(() => this._fetch(b.pad(0.4)), 300);
