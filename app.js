@@ -514,95 +514,23 @@ function slopeColor(deg) {
   return              [244,  67,  54, 217];    // red    – expert       (--slope-d 0.85)
 }
 
-/* ─── Rider heatmap layer ────────────────────────────────────────────── */
+/* ─── Strava heatmap layer ───────────────────────────────────────────── */
 
 /**
- * RiderHeatmapLayer renders a heatmap of ski track density from user-contributed
- * data sources (Wikiloc, OpenStreetMap). Density values are visualized as a
- * colour gradient: cool (low density) → warm (high density).
+ * Strava Global Heatmap shows aggregated, anonymized activity from millions
+ * of Strava users. The blue-to-red gradient indicates activity density:
+ * blue = low activity, red = high activity.
  */
-const RiderHeatmapLayer = L.GridLayer.extend({
-  createTile(coords, done) {
-    const canvas = document.createElement('canvas');
-    const size = this.getTileSize();
-    canvas.width  = size.x;
-    canvas.height = size.y;
-
-    this._renderHeatmapTile(coords, canvas).then(() => done(null, canvas)).catch(err => {
-      console.warn('Heatmap tile error', coords, err);
-      done(err, canvas);
-    });
-
-    return canvas;
-  },
-
-  async _renderHeatmapTile(coords, canvas) {
-    const ctx = canvas.getContext('2d');
-    const imgData = ctx.createImageData(256, 256);
-    const d = imgData.data;
-
-    // Get heatmap data for this tile
-    const density = await this._getTileDensity(coords);
-
-    // Render gradient based on density
-    for (let py = 0; py < 256; py++) {
-      for (let px = 0; px < 256; px++) {
-        const color = this._densityToColor(density);
-        const i = (py * 256 + px) * 4;
-        d[i] = color[0];
-        d[i+1] = color[1];
-        d[i+2] = color[2];
-        d[i+3] = color[3];
-      }
-    }
-
-    ctx.putImageData(imgData, 0, 0);
-  },
-
-  async _getTileDensity(coords) {
-    // Fetch pre-computed heatmap data
-    if (!window._heatmapData) {
-      try {
-        const resp = await fetch('heatmap-data.json');
-        window._heatmapData = await resp.json();
-      } catch (e) {
-        console.warn('Heatmap data load failed', e);
-        window._heatmapData = { tiles: {}, maxDensity: 1 };
-      }
-    }
-
-    const key = `${coords.z}_${coords.x}_${coords.y}`;
-    const density = window._heatmapData.tiles[key] || 0;
-    const maxDensity = window._heatmapData.maxDensity || 1;
-    return density / maxDensity;
-  },
-
-  _densityToColor(normalized) {
-    // Cool (low) → Warm (high) color gradient
-    // 0: Blue (low density)
-    // 0.5: Yellow (medium)
-    // 1: Red (high density)
-    if (normalized < 0.33) {
-      const t = normalized / 0.33;
-      const r = Math.round(0 + t * 100);
-      const g = Math.round(149 + t * 86);
-      const b = Math.round(237 - t * 186);
-      return [r, g, b, 180];
-    } else if (normalized < 0.66) {
-      const t = (normalized - 0.33) / 0.33;
-      const r = Math.round(100 + t * 155);
-      const g = Math.round(235 - t * 50);
-      const b = Math.round(51 + t * 102);
-      return [r, g, b, 180];
-    } else {
-      const t = (normalized - 0.66) / 0.34;
-      const r = Math.round(255 - t * 11);
-      const g = Math.round(185 - t * 130);
-      const b = Math.round(153 - t * 91);
-      return [r, g, b, 180];
-    }
+const stravaHeatmap = L.tileLayer(
+  'https://heatmap-external-{s}.strava.com/tiles/all/bluered/{z}/{x}/{y}.png?v=19',
+  {
+    attribution: '&copy; <a href="https://www.strava.com/">Strava</a> 2024 | &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 15,
+    opacity: 0.6,
+    pane: 'overlayPane',
+    zIndex: 401,
   }
-});
+);
 
 /** Metres per pixel at given zoom and tile row (accounts for latitude). */
 function metersPerPixel(z, coords) {
@@ -769,12 +697,7 @@ const slopeLayer = new SlopeLayer({
   zIndex: 400,
 });
 
-const heatmapLayer = new RiderHeatmapLayer({
-  opacity: 0.6,
-  maxZoom: 18,
-  pane: 'overlayPane',
-  zIndex: 401,
-});
+const heatmapLayer = stravaHeatmap;
 
 /* ─── Shadow (hillshade) layer ───────────────────────────────────────── */
 
