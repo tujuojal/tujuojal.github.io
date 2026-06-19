@@ -660,47 +660,66 @@ const SkiTrackHeatmap = L.GridLayer.extend({
     const z = coords.z;
     const map = this._map;
 
-    // Accumulate route coverage into an offscreen buffer using additive alpha.
-    const acc = document.createElement('canvas');
-    acc.width = size.x; acc.height = size.y;
-    const ax = acc.getContext('2d');
-    ax.lineCap = 'round';
-    ax.lineJoin = 'round';
-    ax.strokeStyle = 'rgba(255,255,255,0.5)';
-    ax.lineWidth = 6;                 // fat stroke → neighbouring routes overlap
-    ax.globalCompositeOperation = 'lighter';
+    // Build density map by counting segment pixels in each location.
+    const density = new Uint8Array(size.x * size.y);
 
     // Cull to this tile's geographic bounds (+margin) to skip far-away segments.
     const pad = 0.02;
     const tb = this._tileLatLngBounds(coords, size).pad(pad);
 
-    let drew = false;
+    // Accumulate density for each pixel touched by a segment.
     for (let i = 0; i < segs.length; i++) {
       const a = segs[i][0], b = segs[i][1];
       if (!tb.contains(a) && !tb.contains(b)) continue;
       const pa = map.project(a, z).subtract(tileOrigin);
       const pb = map.project(b, z).subtract(tileOrigin);
-      ax.beginPath();
-      ax.moveTo(pa.x, pa.y);
-      ax.lineTo(pb.x, pb.y);
-      ax.stroke();
-      drew = true;
-    }
-    if (!drew) return;
 
-    // Read back accumulated coverage (alpha channel = density), colour-map it.
-    const src = ax.getImageData(0, 0, size.x, size.y).data;
-    const out = canvas.getContext('2d').createImageData(size.x, size.y);
-    const d = out.data;
+      // Rasterize line segment into density map.
+      this._rasterizeLine(pa.x, pa.y, pb.x, pb.y, density, size.x, size.y);
+    }
+
+    // Color-map the density and write to canvas.
+    const ctx = canvas.getContext('2d');
+    const imgData = ctx.createImageData(size.x, size.y);
+    const d = imgData.data;
     for (let p = 0; p < size.x * size.y; p++) {
-      const cov = src[p * 4 + 3] / 255;        // 0..1 accumulated coverage
-      if (cov <= 0) continue;
-      const t = Math.min(1, cov * 1.3);        // gentle gain
-      const c = heatColor(t);
+      const dens = density[p] / 255;  // 0..1 density
+      if (dens <= 0) continue;
+      const c = heatColor(dens);
       const o = p * 4;
       d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = c[3];
     }
-    canvas.getContext('2d').putImageData(out, 0, 0);
+    ctx.putImageData(imgData, 0, 0);
+  },
+
+  /** Rasterize a line segment into the density map using Bresenham's line algorithm. */
+  _rasterizeLine(x0, y0, x1, y1, density, w, h) {
+    x0 = Math.round(x0); y0 = Math.round(y0);
+    x1 = Math.round(x1); y1 = Math.round(y1);
+    const dx = Math.abs(x1 - x0);
+    const dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+
+    let x = x0, y = y0;
+    while (true) {
+      // Mark this pixel and nearby pixels (6-pixel line width)
+      for (let ox = -3; ox <= 3; ox++) {
+        for (let oy = -3; oy <= 3; oy++) {
+          const px = x + ox, py = y + oy;
+          if (px >= 0 && px < w && py >= 0 && py < h) {
+            const idx = py * w + px;
+            density[idx] = Math.min(255, density[idx] + 16);
+          }
+        }
+      }
+
+      if (x === x1 && y === y1) break;
+      const e2 = 2 * err;
+      if (e2 > -dy) { err -= dy; x += sx; }
+      if (e2 < dx) { err += dx; y += sy; }
+    }
   },
 
   /** Geographic bounds of a tile (for culling). */
