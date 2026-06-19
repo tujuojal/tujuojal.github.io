@@ -700,7 +700,7 @@ const SkiTrackHeatmap = L.GridLayer.extend({
   _tileLatLngBounds(coords, size) {
     const map = this._map, z = coords.z;
     const nw = map.unproject(coords.scaleBy(size), z);
-    const se = map.unproject(coords.add([1, 1]).scaleBy(size), z);
+    const se = map.unproject(L.point(coords.x + 1, coords.y + 1).scaleBy(size), z);
     return L.latLngBounds(nw, se);
   },
 });
