@@ -64,6 +64,15 @@ const TERRARIUM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{
 // Minimum zoom at which slope calculation is meaningful
 const MIN_SLOPE_ZOOM = 10;
 
+// Ski-track heatmap: ski-route geometry comes live from the OpenStreetMap
+// Overpass API (CORS-enabled, no key). We rasterise the returned polylines into
+// a blue→red density overlay client-side. Overpass is heavy at low zoom, so the
+// layer only queries at MIN_HEATMAP_ZOOM+.
+const OVERPASS_URL    = 'https://overpass-api.de/api/interpreter';
+const MIN_HEATMAP_ZOOM = 9;
+const OSM_HEATMAP_ATTRIB =
+  'Ski routes &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (ODbL)';
+
 // NVE "Bratthet med utløp" — single pre-rendered WMTS tileset combining steepness
 // (colour-coded by angle) and avalanche runout zones. Same source as skimo.pro / Varsom.
 const NVE_BRATTHET_UTLOP_URL = 'https://gis3.nve.no/arcgis/rest/services/wmts/Bratthet_med_utlop_2024/MapServer/tile/{z}/{y}/{x}';
@@ -514,23 +523,216 @@ function slopeColor(deg) {
   return              [244,  67,  54, 217];    // red    – expert       (--slope-d 0.85)
 }
 
-/* ─── Strava heatmap layer ───────────────────────────────────────────── */
+/* ─── Ski-track heatmap layer ────────────────────────────────────────── */
 
 /**
- * Strava Global Heatmap shows aggregated, anonymized activity from millions
- * of Strava users. The blue-to-red gradient indicates activity density:
- * blue = low activity, red = high activity.
+ * Map an accumulated track-density value (0..1) to an RGBA "blue→red" colour,
+ * the classic heatmap ramp: transparent → blue → cyan → lime → yellow → red.
+ * Density is the normalised overlap of ski routes near a pixel, so warmer =
+ * more routes concentrated there.
  */
-const stravaHeatmap = L.tileLayer(
-  'https://heatmap-external-{s}.strava.com/tiles/all/bluered/{z}/{x}/{y}.png?v=19',
-  {
-    attribution: '&copy; <a href="https://www.strava.com/">Strava</a> 2024 | &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: 15,
-    opacity: 0.6,
-    pane: 'overlayPane',
-    zIndex: 401,
+function heatColor(t) {
+  if (t <= 0) return [0, 0, 0, 0];
+  t = Math.min(1, t);
+  // piecewise linear through blue, cyan, lime, yellow, red
+  const stops = [
+    [0.0, [ 30,  60, 220]],   // blue
+    [0.35,[  0, 200, 230]],   // cyan
+    [0.6, [ 90, 220,  70]],   // lime
+    [0.8, [255, 220,  40]],   // yellow
+    [1.0, [240,  40,  30]],   // red
+  ];
+  let i = 0;
+  while (i < stops.length - 1 && t > stops[i + 1][0]) i++;
+  const [t0, c0] = stops[i];
+  const [t1, c1] = stops[Math.min(i + 1, stops.length - 1)];
+  const f = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
+  const r = Math.round(c0[0] + (c1[0] - c0[0]) * f);
+  const g = Math.round(c0[1] + (c1[1] - c0[1]) * f);
+  const b = Math.round(c0[2] + (c1[2] - c0[2]) * f);
+  // ramp alpha in at the low end so faint areas don't hard-edge
+  const a = Math.round(255 * Math.min(1, 0.25 + t * 0.75));
+  return [r, g, b, a];
+}
+
+/**
+ * SkiTrackHeatmap renders a density heatmap of mapped ski routes.
+ *
+ * Data: `route=ski` ways/relations and `piste:type` ways fetched live from the
+ * OpenStreetMap Overpass API for the current view (CORS-enabled, no key, ODbL).
+ * Rendering: each polyline is stroked into a per-tile accumulation buffer with
+ * additive blending; overlapping/nearby routes build up density, which is then
+ * blurred and mapped through heatColor() → a real blue→red heatmap.
+ *
+ * Note: this shows where ski routes are *mapped* (the open, embeddable stand-in
+ * for proprietary GPS-rider heatmaps like Strava's), hotter where routes
+ * concentrate. Source of truth for the data is OSM.
+ */
+const SkiTrackHeatmap = L.GridLayer.extend({
+
+  initialize(options) {
+    L.GridLayer.prototype.initialize.call(this, options);
+    this._segments = [];      // [[latlng, latlng], ...] flattened route segments
+    this._fetchedBounds = null;
+    this._fetching = false;
+  },
+
+  onAdd(map) {
+    L.GridLayer.prototype.onAdd.call(this, map);
+    this._map.on('moveend', this._maybeFetch, this);
+    this._maybeFetch();
+  },
+
+  onRemove(map) {
+    map.off('moveend', this._maybeFetch, this);
+    L.GridLayer.prototype.onRemove.call(this, map);
+  },
+
+  /** Fetch ski-route geometry for the current view if we've moved out of the
+   *  previously-fetched area (with a margin). Debounced & de-duplicated. */
+  _maybeFetch() {
+    if (!this._map) return;
+    if (this._map.getZoom() < MIN_HEATMAP_ZOOM) return;
+    const b = this._map.getBounds();
+    if (this._fetchedBounds && this._fetchedBounds.contains(b)) return;
+    clearTimeout(this._fetchTimer);
+    this._fetchTimer = setTimeout(() => this._fetch(b.pad(0.4)), 300);
+  },
+
+  async _fetch(bounds) {
+    if (this._fetching) return;
+    this._fetching = true;
+    startLoading();
+    const s = bounds.getSouth(), w = bounds.getWest(),
+          n = bounds.getNorth(), e = bounds.getEast();
+    const bbox = `${s},${w},${n},${e}`;
+    const query =
+      `[out:json][timeout:25];` +
+      `(way["piste:type"](${bbox});` +
+      ` way["route"="ski"](${bbox});` +
+      ` relation["route"="ski"](${bbox}););` +
+      `out geom;`;
+    try {
+      const resp = await fetch(OVERPASS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(query),
+      });
+      if (!resp.ok) throw new Error('Overpass HTTP ' + resp.status);
+      const json = await resp.json();
+      this._segments = parseOverpassSegments(json);
+      this._fetchedBounds = bounds;
+      this.redraw();
+    } catch (err) {
+      console.warn('Ski-route fetch failed', err);
+      showToast('Could not load ski routes (network/Overpass busy)');
+    } finally {
+      this._fetching = false;
+      stopLoading();
+    }
+  },
+
+  createTile(coords, done) {
+    const canvas = document.createElement('canvas');
+    const size = this.getTileSize();
+    canvas.width = size.x;
+    canvas.height = size.y;
+    // Render async so done() can report completion to the loading counter.
+    setTimeout(() => {
+      try { this._renderTile(coords, canvas); done(null, canvas); }
+      catch (err) { done(err, canvas); }
+    }, 0);
+    return canvas;
+  },
+
+  _renderTile(coords, canvas) {
+    const segs = this._segments;
+    if (!segs || !segs.length) return;
+    const size = this.getTileSize();
+    const tileOrigin = coords.scaleBy(size);   // pixel origin of this tile
+    const z = coords.z;
+    const map = this._map;
+
+    // Accumulate route coverage into an offscreen buffer using additive alpha.
+    const acc = document.createElement('canvas');
+    acc.width = size.x; acc.height = size.y;
+    const ax = acc.getContext('2d');
+    ax.lineCap = 'round';
+    ax.lineJoin = 'round';
+    ax.strokeStyle = 'rgba(255,255,255,0.5)';
+    ax.lineWidth = 6;                 // fat stroke → neighbouring routes overlap
+    ax.globalCompositeOperation = 'lighter';
+
+    // Cull to this tile's geographic bounds (+margin) to skip far-away segments.
+    const pad = 0.02;
+    const tb = this._tileLatLngBounds(coords, size).pad(pad);
+
+    let drew = false;
+    for (let i = 0; i < segs.length; i++) {
+      const a = segs[i][0], b = segs[i][1];
+      if (!tb.contains(a) && !tb.contains(b)) continue;
+      const pa = map.project(a, z).subtract(tileOrigin);
+      const pb = map.project(b, z).subtract(tileOrigin);
+      ax.beginPath();
+      ax.moveTo(pa.x, pa.y);
+      ax.lineTo(pb.x, pb.y);
+      ax.stroke();
+      drew = true;
+    }
+    if (!drew) return;
+
+    // Read back accumulated coverage (alpha channel = density), colour-map it.
+    const src = ax.getImageData(0, 0, size.x, size.y).data;
+    const out = canvas.getContext('2d').createImageData(size.x, size.y);
+    const d = out.data;
+    for (let p = 0; p < size.x * size.y; p++) {
+      const cov = src[p * 4 + 3] / 255;        // 0..1 accumulated coverage
+      if (cov <= 0) continue;
+      const t = Math.min(1, cov * 1.3);        // gentle gain
+      const c = heatColor(t);
+      const o = p * 4;
+      d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = c[3];
+    }
+    canvas.getContext('2d').putImageData(out, 0, 0);
+  },
+
+  /** Geographic bounds of a tile (for culling). */
+  _tileLatLngBounds(coords, size) {
+    const map = this._map, z = coords.z;
+    const nw = map.unproject(coords.scaleBy(size), z);
+    const se = map.unproject(coords.add([1, 1]).scaleBy(size), z);
+    return L.latLngBounds(nw, se);
+  },
+});
+
+/** Flatten an Overpass `out geom;` response into [latlng, latlng] segments. */
+function parseOverpassSegments(json) {
+  const segs = [];
+  const els = (json && json.elements) || [];
+  for (const el of els) {
+    // ways carry .geometry; relations carry .members[].geometry
+    const geoms = el.geometry ? [el.geometry]
+                : el.members ? el.members.map(m => m.geometry).filter(Boolean)
+                : [];
+    for (const g of geoms) {
+      for (let i = 0; i + 1 < g.length; i++) {
+        segs.push([
+          L.latLng(g[i].lat, g[i].lon),
+          L.latLng(g[i + 1].lat, g[i + 1].lon),
+        ]);
+      }
+    }
   }
-);
+  return segs;
+}
+
+const skiTrackHeatmap = new SkiTrackHeatmap({
+  attribution: OSM_HEATMAP_ATTRIB,
+  opacity: 0.7,
+  maxZoom: 18,
+  pane: 'overlayPane',
+  zIndex: 401,
+});
 
 /** Metres per pixel at given zoom and tile row (accounts for latitude). */
 function metersPerPixel(z, coords) {
@@ -697,7 +899,7 @@ const slopeLayer = new SlopeLayer({
   zIndex: 400,
 });
 
-const heatmapLayer = stravaHeatmap;
+const heatmapLayer = skiTrackHeatmap;
 
 /* ─── Shadow (hillshade) layer ───────────────────────────────────────── */
 
@@ -928,6 +1130,9 @@ toggleHeatmap.addEventListener('change', () => {
 
   if (state.heatmapActive) {
     heatmapLayer.addTo(map);
+    if (map.getZoom() < MIN_HEATMAP_ZOOM) {
+      showToast('Zoom in to level ' + MIN_HEATMAP_ZOOM + '+ to load ski routes');
+    }
   } else {
     heatmapLayer.remove();
   }

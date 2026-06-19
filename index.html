@@ -156,13 +156,13 @@
 
         <div class="divider"></div>
 
-        <!-- Strava activity heatmap overlay -->
+        <!-- Ski-track heatmap overlay -->
         <div class="control-row">
           <div class="control-label">
-            <span class="label-text">Activity Heatmap</span>
-            <span class="label-sub">Strava user activity density</span>
+            <span class="label-text">Ski-Track Heatmap</span>
+            <span class="label-sub">Ski-route density from OpenStreetMap</span>
           </div>
-          <label class="toggle" aria-label="Toggle activity heatmap overlay">
+          <label class="toggle" aria-label="Toggle ski-track heatmap overlay">
             <input type="checkbox" id="toggle-heatmap">
             <span class="toggle-track">
               <span class="toggle-thumb"></span>
@@ -172,19 +172,20 @@
 
         <div id="heatmap-controls" class="control-section disabled">
           <div class="aval-legend-group">
-            <div class="aval-legend-title">Activity Density (Strava)</div>
+            <div class="aval-legend-title">Route Density</div>
             <div class="aval-steep-scale">
-              <span class="aval-steep-seg" style="background:#0000FF"></span>
-              <span class="aval-steep-seg" style="background:#00FFFF"></span>
-              <span class="aval-steep-seg" style="background:#00FF00"></span>
-              <span class="aval-steep-seg" style="background:#FFFF00"></span>
-              <span class="aval-steep-seg" style="background:#FF0000"></span>
+              <span class="aval-steep-seg" style="background:#1e3cdc"></span>
+              <span class="aval-steep-seg" style="background:#00c8e6"></span>
+              <span class="aval-steep-seg" style="background:#5adc46"></span>
+              <span class="aval-steep-seg" style="background:#ffdc28"></span>
+              <span class="aval-steep-seg" style="background:#f0281e"></span>
             </div>
             <div class="aval-steep-labels">
               <span>Low</span><span></span><span>Medium</span><span></span><span>High</span>
             </div>
             <div style="margin-top: 0.75rem; font-size: 0.85rem; color: #888; line-height: 1.4;">
-              Shows aggregated activity from millions of Strava users. Useful for discovering popular ski touring routes and conditions.
+              Mapped ski-touring &amp; piste routes from OpenStreetMap, hotter where
+              routes concentrate. Loads live for the current view — zoom in to level 9+.
             </div>
           </div>
         </div>
