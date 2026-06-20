@@ -557,7 +557,8 @@ function heatColor(t) {
 const stravaHeatmap = L.tileLayer(STRAVA_HEATMAP_URL, {
   attribution: STRAVA_ATTRIB,
   opacity: 0.6,
-  maxZoom: 12,
+  maxNativeZoom: 12,   // Strava serves public tiles only to z12; above this Leaflet upscales
+  maxZoom: 18,         // keep the overlay visible (upscaled) when zooming in further
   pane: 'overlayPane',
   zIndex: 401,
 });
@@ -958,9 +959,6 @@ toggleHeatmap.addEventListener('change', () => {
 
   if (state.heatmapActive) {
     heatmapLayer.addTo(map);
-    if (map.getZoom() < MIN_HEATMAP_ZOOM) {
-      showToast('Zoom in to level ' + MIN_HEATMAP_ZOOM + '+ to load ski routes');
-    }
   } else {
     heatmapLayer.remove();
   }
