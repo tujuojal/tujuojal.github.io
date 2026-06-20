@@ -557,7 +557,6 @@ function heatColor(t) {
 const stravaHeatmap = L.tileLayer(STRAVA_HEATMAP_URL, {
   attribution: STRAVA_ATTRIB,
   opacity: 0.6,
-  maxZoom: 15,         // Keep heatmap visible up to zoom 15
   pane: 'overlayPane',
   zIndex: 401,
 });
