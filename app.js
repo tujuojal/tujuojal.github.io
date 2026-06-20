@@ -557,8 +557,7 @@ function heatColor(t) {
 const stravaHeatmap = L.tileLayer(STRAVA_HEATMAP_URL, {
   attribution: STRAVA_ATTRIB,
   opacity: 0.6,
-  maxNativeZoom: 12,   // Strava serves public tiles only to z12; above this Leaflet upscales
-  maxZoom: 18,         // keep the overlay visible (upscaled) when zooming in further
+  maxZoom: 15,         // Keep heatmap visible up to zoom 15
   pane: 'overlayPane',
   zIndex: 401,
 });
