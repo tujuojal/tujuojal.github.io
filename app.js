@@ -1971,6 +1971,15 @@ function _registerHeatmapProtocol() {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 256;
     try {
+      // Ensure heatmap layer is properly initialized
+      if (!heatmapLayer) {
+        console.error('Heatmap layer not initialized');
+        throw new Error('heatmapLayer is null');
+      }
+      if (!heatmapLayer._map) {
+        console.warn('Heatmap layer map not set - data may not be available yet');
+      }
+
       // Create a coords object that mimics Leaflet's GridLayer.Coords
       const makeTileCoords = (x, y, z) => ({
         x, y, z,
@@ -1984,7 +1993,7 @@ function _registerHeatmapProtocol() {
       const coords = makeTileCoords(x, y, z);
       heatmapLayer._renderTile(coords, canvas);
     } catch (err) {
-      console.warn('Heatmap tile render failed', err);
+      console.error('Heatmap 3D tile render error:', err.message, 'at z=' + z + ' x=' + x + ' y=' + y);
     }
 
     return new Promise((resolve, reject) => {
