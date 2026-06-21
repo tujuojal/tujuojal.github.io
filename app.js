@@ -960,6 +960,8 @@ toggleHeatmap.addEventListener('change', () => {
   } else {
     heatmapLayer.remove();
   }
+
+  _apply3DHeatmapLayer();
 });
 
 // Base map selector
@@ -1718,6 +1720,12 @@ function build3DStyle() {
         tileSize: 256,
         maxzoom: 18,
       },
+      'heatmap-3d': {
+        type: 'raster',
+        tiles: [_heatmapTiles()],
+        tileSize: 256,
+        maxzoom: 18,
+      },
     },
     layers: [
       { id: 'basemap',        type: 'raster', source: 'basemap' },
@@ -1725,6 +1733,7 @@ function build3DStyle() {
       { id: 'aval-jp-slope',  type: 'raster', source: 'aval-jp-slope',  paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
       { id: 'aval-jp-hazard', type: 'raster', source: 'aval-jp-hazard', paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
       { id: 'slope-3d',       type: 'raster', source: 'slope-3d',       paint: { 'raster-opacity': 0.65 }, layout: { visibility: 'none' } },
+      { id: 'heatmap-3d',     type: 'raster', source: 'heatmap-3d',     paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
     ],
   };
 }
@@ -1767,6 +1776,62 @@ function _registerSlopeProtocol() {
   });
 }
 
+// Heatmap 3D protocol (similar to slope)
+let _heatmap3dVer = 1;
+let _heatmap3dProtocolRegistered = false;
+
+function _heatmapTiles() {
+  return `heatmap://v${_heatmap3dVer}/{z}/{x}/{y}`;
+}
+
+function _registerHeatmapProtocol() {
+  if (_heatmap3dProtocolRegistered || typeof maplibregl.addProtocol !== 'function') return;
+  _heatmap3dProtocolRegistered = true;
+
+  maplibregl.addProtocol('heatmap', async (params, abortController) => {
+    const parts = params.url.replace('heatmap://', '').split('/');
+    // parts: ['v<N>', z, x, y]
+    const z = parseInt(parts[1]);
+    const x = parseInt(parts[2]);
+    const y = parseInt(parts[3]);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 256;
+    try {
+      // Create a coords object that mimics Leaflet's GridLayer.Coords
+      const makeTileCoords = (x, y, z) => ({
+        x, y, z,
+        scaleBy(scale) {
+          return L.point(this.x * scale.x, this.y * scale.y);
+        },
+        add(delta) {
+          return makeTileCoords(this.x + delta[0], this.y + delta[1], this.z);
+        }
+      });
+      const coords = makeTileCoords(x, y, z);
+      heatmapLayer._renderTile(coords, canvas);
+    } catch (err) {
+      console.warn('Heatmap tile render failed', err);
+    }
+
+    return new Promise((resolve, reject) => {
+      if (abortController && abortController.signal.aborted) {
+        reject(new Error('aborted'));
+        return;
+      }
+      canvas.toBlob(blob => {
+        if (!blob) { reject(new Error('heatmap toBlob failed')); return; }
+        blob.arrayBuffer().then(buf => resolve({ data: buf })).catch(reject);
+      }, 'image/png');
+    });
+  });
+}
+
+function _apply3DHeatmapLayer() {
+  if (!map3d || !map3d.isStyleLoaded()) return;
+  map3d.setLayoutProperty('heatmap-3d', 'visibility', state.heatmapActive ? 'visible' : 'none');
+}
+
 function _apply3DSlopeLayer() {
   if (!map3d || !map3d.isStyleLoaded()) return;
   map3d.setLayoutProperty('slope-3d', 'visibility', state.slopeActive ? 'visible' : 'none');
@@ -1800,6 +1865,7 @@ function init3D() {
   if (map3d) return;
 
   _registerSlopeProtocol();
+  _registerHeatmapProtocol();
 
   const center = map.getCenter();
 
@@ -1852,7 +1918,11 @@ btn3d.addEventListener('click', () => {
       map3d.setCenter([c.lng, c.lat]);
       map3d.setZoom(z);
       map3d.resize();                  // repeat visits: re-measure container
-      if (state.shadowActive) updateShadow();  // apply 3D sun lighting
+      // Apply all overlay layer states from 2D to 3D
+      if (state.shadowActive) updateShadow();
+      _apply3DSlopeLayer();
+      _apply3DAvalancheLayers();
+      _apply3DHeatmapLayer();
       // Restore location marker in 3D (arrow rotation handled by next orientation event)
       if (_trackingOn && _lastPos) _update3DLocMarker();
     });
