@@ -2105,6 +2105,10 @@ btn3d.addEventListener('click', () => {
       _apply3DSlopeLayer();
       _apply3DAvalancheLayers();
       _apply3DHeatmapLayer();
+      // Fetch heatmap data for 3D view bounds if heatmap is active
+      if (state.heatmapActive && heatmapLayer._maybeFetch) {
+        heatmapLayer._maybeFetch();
+      }
       // Restore location marker in 3D (arrow rotation handled by next orientation event)
       if (_trackingOn && _lastPos) _update3DLocMarker();
     });
