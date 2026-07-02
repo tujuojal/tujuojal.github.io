@@ -2068,6 +2068,9 @@ function init3D() {
   map3d.once('load', () => {
     _apply3DAvalancheLayers();
     _apply3DSlopeLayer();
+    _apply3DHeatmapLayer();
+    // Ensure heatmap route data is available for the 3D viewport
+    if (state.heatmapActive && heatmapLayer._maybeFetch) heatmapLayer._maybeFetch();
     if (_trackingOn && _lastPos) _update3DLocMarker();
     map3d.on('zoomend', updateZoomHint);
     // Keep the direction arrow aligned when user two-finger rotates the 3D map
