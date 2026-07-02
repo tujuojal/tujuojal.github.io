@@ -1720,12 +1720,6 @@ function build3DStyle() {
         tileSize: 256,
         maxzoom: 18,
       },
-      'heatmap-3d': {
-        type: 'raster',
-        tiles: [_heatmapTiles()],
-        tileSize: 256,
-        maxzoom: 18,
-      },
     },
     layers: [
       { id: 'basemap',        type: 'raster', source: 'basemap' },
@@ -1733,7 +1727,6 @@ function build3DStyle() {
       { id: 'aval-jp-slope',  type: 'raster', source: 'aval-jp-slope',  paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
       { id: 'aval-jp-hazard', type: 'raster', source: 'aval-jp-hazard', paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
       { id: 'slope-3d',       type: 'raster', source: 'slope-3d',       paint: { 'raster-opacity': 0.65 }, layout: { visibility: 'none' } },
-      { id: 'heatmap-3d',     type: 'raster', source: 'heatmap-3d',     paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
     ],
   };
 }
@@ -1776,70 +1769,51 @@ function _registerSlopeProtocol() {
   });
 }
 
-// Heatmap 3D protocol (similar to slope)
-let _heatmap3dVer = 1;
-let _heatmap3dProtocolRegistered = false;
+// Heatmap 3D overlay: Strava's CDN has no CORS headers so we can't feed
+// pixel data to MapLibre. Instead, a minimal Leaflet map (pointer-events:none)
+// sits on top of the MapLibre canvas and loads tiles the same way 2D does.
+let _heatmapOverlayEl  = null;
+let _heatmapOverlayMap = null;
 
-function _heatmapTiles() {
-  return `heatmap://v${_heatmap3dVer}/{z}/{x}/{y}`;
+function _init3DHeatmapOverlay() {
+  if (_heatmapOverlayEl) return;
+
+  _heatmapOverlayEl = document.createElement('div');
+  _heatmapOverlayEl.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2;';
+  map3dEl.parentElement.appendChild(_heatmapOverlayEl);
+
+  _heatmapOverlayMap = L.map(_heatmapOverlayEl, {
+    zoomControl: false, attributionControl: false,
+    keyboard: false, dragging: false, scrollWheelZoom: false,
+    doubleClickZoom: false, touchZoom: false, tap: false,
+    fadeAnimation: false, zoomAnimation: false,
+  });
+
+  L.tileLayer(STRAVA_HEATMAP_URL, { opacity: 0.6 }).addTo(_heatmapOverlayMap);
+  _heatmapOverlayMap.getContainer().style.background = 'transparent';
 }
 
-function _registerHeatmapProtocol() {
-  if (_heatmap3dProtocolRegistered || typeof maplibregl.addProtocol !== 'function') return;
-  _heatmap3dProtocolRegistered = true;
-
-  maplibregl.addProtocol('heatmap', (params, abortController) => {
-    const parts = params.url.replace('heatmap://', '').split('/');
-    const z = parseInt(parts[1]);
-    const x = parseInt(parts[2]);
-    const y = parseInt(parts[3]);
-    const url = STRAVA_HEATMAP_URL.replace('{z}', z).replace('{x}', x).replace('{y}', y);
-
-    return new Promise((resolve, reject) => {
-      let aborted = false;
-      if (abortController && abortController.signal) {
-        abortController.signal.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
-      }
-
-      function loadWithCrossOrigin(crossOrigin) {
-        const img = new Image();
-        if (crossOrigin !== null) img.crossOrigin = crossOrigin;
-        img.onload = () => {
-          if (aborted) return;
-          const canvas = document.createElement('canvas');
-          canvas.width = img.naturalWidth || 256;
-          canvas.height = img.naturalHeight || 256;
-          canvas.getContext('2d').drawImage(img, 0, 0);
-          try {
-            canvas.toBlob(blob => {
-              if (!blob) { resolve({ data: new ArrayBuffer(0) }); return; }
-              blob.arrayBuffer().then(buf => resolve({ data: buf })).catch(reject);
-            }, 'image/png');
-          } catch (e) {
-            // Tainted canvas (crossOrigin=null path) — return transparent tile
-            resolve({ data: new ArrayBuffer(0) });
-          }
-        };
-        img.onerror = () => {
-          if (aborted) return;
-          if (crossOrigin === 'anonymous') {
-            // CORS attempt failed — retry without crossOrigin (tile still renders, canvas tainted)
-            loadWithCrossOrigin(null);
-          } else {
-            reject(new Error(`Strava heatmap tile load failed`));
-          }
-        };
-        img.src = url;
-      }
-
-      loadWithCrossOrigin('anonymous');
-    });
-  });
+function _sync3DHeatmapOverlay() {
+  if (!_heatmapOverlayMap || !map3d) return;
+  const c = map3d.getCenter();
+  _heatmapOverlayMap.setView([c.lat, c.lng], map3d.getZoom(), { animate: false });
 }
 
 function _apply3DHeatmapLayer() {
-  if (!map3d || !map3d.isStyleLoaded()) return;
-  map3d.setLayoutProperty('heatmap-3d', 'visibility', state.heatmapActive ? 'visible' : 'none');
+  const in3D = !map3dEl.classList.contains('hidden');
+  if (!in3D) return;
+
+  if (state.heatmapActive) {
+    if (!_heatmapOverlayEl) _init3DHeatmapOverlay();
+    _heatmapOverlayEl.style.display = '';
+    _heatmapOverlayMap.invalidateSize();
+    _sync3DHeatmapOverlay();
+    map3d.off('move', _sync3DHeatmapOverlay);
+    map3d.on('move', _sync3DHeatmapOverlay);
+  } else {
+    if (_heatmapOverlayEl) _heatmapOverlayEl.style.display = 'none';
+    if (map3d) map3d.off('move', _sync3DHeatmapOverlay);
+  }
 }
 
 function _apply3DSlopeLayer() {
@@ -1875,7 +1849,6 @@ function init3D() {
   if (map3d) return;
 
   _registerSlopeProtocol();
-  _registerHeatmapProtocol();
 
   const center = map.getCenter();
 
@@ -1897,8 +1870,6 @@ function init3D() {
     _apply3DAvalancheLayers();
     _apply3DSlopeLayer();
     _apply3DHeatmapLayer();
-    // Ensure heatmap route data is available for the 3D viewport
-    if (state.heatmapActive && heatmapLayer._maybeFetch) heatmapLayer._maybeFetch();
     if (_trackingOn && _lastPos) _update3DLocMarker();
     map3d.on('zoomend', updateZoomHint);
     // Keep the direction arrow aligned when user two-finger rotates the 3D map
@@ -1936,10 +1907,6 @@ btn3d.addEventListener('click', () => {
       _apply3DSlopeLayer();
       _apply3DAvalancheLayers();
       _apply3DHeatmapLayer();
-      // Fetch heatmap data for 3D view bounds if heatmap is active
-      if (state.heatmapActive && heatmapLayer._maybeFetch) {
-        heatmapLayer._maybeFetch();
-      }
       // Restore location marker in 3D (arrow rotation handled by next orientation event)
       if (_trackingOn && _lastPos) _update3DLocMarker();
     });
@@ -1954,6 +1921,8 @@ btn3d.addEventListener('click', () => {
     // Restore 2D bearing from device heading if tracking
     if (_trackingOn && _deviceHead !== null) setMapBearing(_deviceHead);
     map3dEl.classList.add('hidden');
+    if (_heatmapOverlayEl) _heatmapOverlayEl.style.display = 'none';
+    if (map3d) map3d.off('move', _sync3DHeatmapOverlay);
     mapEl.classList.remove('hidden');
     btn3d.classList.remove('active');
     btn3d.setAttribute('aria-pressed', 'false');
