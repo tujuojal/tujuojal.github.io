@@ -1795,44 +1795,12 @@ function _registerHeatmapProtocol() {
     const x = parseInt(parts[2]);
     const y = parseInt(parts[3]);
 
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 256;
-    try {
-      // Ensure heatmap layer is properly initialized
-      if (!heatmapLayer) {
-        console.error('Heatmap layer not initialized');
-        throw new Error('heatmapLayer is null');
-      }
-      if (!heatmapLayer._map) {
-        console.warn('Heatmap layer map not set - data may not be available yet');
-      }
-
-      // Create a coords object that mimics Leaflet's GridLayer.Coords
-      const makeTileCoords = (x, y, z) => ({
-        x, y, z,
-        scaleBy(scale) {
-          return L.point(this.x * scale.x, this.y * scale.y);
-        },
-        add(delta) {
-          return makeTileCoords(this.x + delta[0], this.y + delta[1], this.z);
-        }
-      });
-      const coords = makeTileCoords(x, y, z);
-      heatmapLayer._renderTile(coords, canvas);
-    } catch (err) {
-      console.error('Heatmap 3D tile render error:', err.message, 'at z=' + z + ' x=' + x + ' y=' + y);
-    }
-
-    return new Promise((resolve, reject) => {
-      if (abortController && abortController.signal.aborted) {
-        reject(new Error('aborted'));
-        return;
-      }
-      canvas.toBlob(blob => {
-        if (!blob) { reject(new Error('heatmap toBlob failed')); return; }
-        blob.arrayBuffer().then(buf => resolve({ data: buf })).catch(reject);
-      }, 'image/png');
-    });
+    const url = STRAVA_HEATMAP_URL.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+    const signal = abortController && abortController.signal;
+    const response = await fetch(url, { credentials: 'include', signal });
+    if (!response.ok) throw new Error(`Strava heatmap tile ${response.status}`);
+    const data = await response.arrayBuffer();
+    return { data };
   });
 }
 
