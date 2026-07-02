@@ -1788,19 +1788,52 @@ function _registerHeatmapProtocol() {
   if (_heatmap3dProtocolRegistered || typeof maplibregl.addProtocol !== 'function') return;
   _heatmap3dProtocolRegistered = true;
 
-  maplibregl.addProtocol('heatmap', async (params, abortController) => {
+  maplibregl.addProtocol('heatmap', (params, abortController) => {
     const parts = params.url.replace('heatmap://', '').split('/');
-    // parts: ['v<N>', z, x, y]
     const z = parseInt(parts[1]);
     const x = parseInt(parts[2]);
     const y = parseInt(parts[3]);
-
     const url = STRAVA_HEATMAP_URL.replace('{z}', z).replace('{x}', x).replace('{y}', y);
-    const signal = abortController && abortController.signal;
-    const response = await fetch(url, { credentials: 'include', signal });
-    if (!response.ok) throw new Error(`Strava heatmap tile ${response.status}`);
-    const data = await response.arrayBuffer();
-    return { data };
+
+    return new Promise((resolve, reject) => {
+      let aborted = false;
+      if (abortController && abortController.signal) {
+        abortController.signal.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
+      }
+
+      function loadWithCrossOrigin(crossOrigin) {
+        const img = new Image();
+        if (crossOrigin !== null) img.crossOrigin = crossOrigin;
+        img.onload = () => {
+          if (aborted) return;
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || 256;
+          canvas.height = img.naturalHeight || 256;
+          canvas.getContext('2d').drawImage(img, 0, 0);
+          try {
+            canvas.toBlob(blob => {
+              if (!blob) { resolve({ data: new ArrayBuffer(0) }); return; }
+              blob.arrayBuffer().then(buf => resolve({ data: buf })).catch(reject);
+            }, 'image/png');
+          } catch (e) {
+            // Tainted canvas (crossOrigin=null path) — return transparent tile
+            resolve({ data: new ArrayBuffer(0) });
+          }
+        };
+        img.onerror = () => {
+          if (aborted) return;
+          if (crossOrigin === 'anonymous') {
+            // CORS attempt failed — retry without crossOrigin (tile still renders, canvas tainted)
+            loadWithCrossOrigin(null);
+          } else {
+            reject(new Error(`Strava heatmap tile load failed`));
+          }
+        };
+        img.src = url;
+      }
+
+      loadWithCrossOrigin('anonymous');
+    });
   });
 }
 
