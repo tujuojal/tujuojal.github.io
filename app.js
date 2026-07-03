@@ -559,6 +559,10 @@ const stravaHeatmap = L.tileLayer(STRAVA_HEATMAP_URL, {
   opacity: 0.6,
   pane: 'overlayPane',
   zIndex: 401,
+  // Strava serves unauthenticated tiles only up to zoom 11; above that,
+  // upscale the z11 tiles instead of requesting login-gated ones (503).
+  maxNativeZoom: 11,
+  maxZoom: 19,
 });
 
 /** Metres per pixel at given zoom and tile row (accounts for latitude). */
@@ -1789,7 +1793,7 @@ function _init3DHeatmapOverlay() {
     fadeAnimation: false, zoomAnimation: false,
   });
 
-  L.tileLayer(STRAVA_HEATMAP_URL, { opacity: 0.6 }).addTo(_heatmapOverlayMap);
+  L.tileLayer(STRAVA_HEATMAP_URL, { opacity: 0.6, maxNativeZoom: 11, maxZoom: 19 }).addTo(_heatmapOverlayMap);
   _heatmapOverlayMap.getContainer().style.background = 'transparent';
 }
 
