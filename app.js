@@ -71,6 +71,9 @@ const STRAVA_HEATMAP_URL = 'https://heatmap-external-b.strava.com/tiles/all/hot/
 // CORS proxy (Cloudflare Worker) — Strava's CDN has no CORS headers, so the
 // 3D MapLibre view loads tiles through this instead. Edge-cached 24 h.
 const STRAVA_HEATMAP_PROXY_URL = 'https://powsurf-heatmap.powsurf-heatmap.workers.dev/{z}/{x}/{y}.png';
+// Same worker proxies NLS Finland requests, appending the API key server-side
+// (stored as a Worker secret) so no key ships in this public repo.
+const NLS_PROXY_BASE = 'https://powsurf-heatmap.powsurf-heatmap.workers.dev/nls';
 const STRAVA_ATTRIB = 'Activity density &copy; <a href="https://www.strava.com">Strava</a>';
 
 // NVE "Bratthet med utløp" — single pre-rendered WMTS tileset combining steepness
@@ -92,15 +95,11 @@ const CACHE_MAX = 256;
 
 /* ─── App state ─────────────────────────────────────────────────────── */
 
-// Built-in NLS Finland API key — free tier, usage counts against the site
-// owner's account. Users can still override it via the panel input.
-const DEFAULT_MML_API_KEY = 'd6c67bf9-7f85-469f-8dfc-2fae04fbbcce';
-
 let _savedApiKey = '';
 try { _savedApiKey = localStorage.getItem('mml_api_key') || ''; } catch {}
 
 const state = {
-  apiKey: _savedApiKey || DEFAULT_MML_API_KEY,
+  apiKey: _savedApiKey,
   slopeActive:        false,
   minSlope:           15,
   maxSlope:           45,
@@ -126,7 +125,10 @@ const map = L.map('map', {
 /* ─── Tile layers ────────────────────────────────────────────────────── */
 
 function mmlUrl(layer) {
-  return `${MML_BASE}/${layer}/default/${MML_MATRIX}/{z}/{y}/{x}.png?api-key=${state.apiKey}`;
+  if (state.apiKey) {
+    return `${MML_BASE}/${layer}/default/${MML_MATRIX}/{z}/{y}/{x}.png?api-key=${state.apiKey}`;
+  }
+  return `${NLS_PROXY_BASE}/avoin/wmts/1.0.0/${layer}/default/${MML_MATRIX}/{z}/{y}/{x}.png`;
 }
 
 const layers = {
@@ -170,19 +172,13 @@ function buildMmlLayer(layerName) {
   });
 }
 
-/** Switch active base map.  If NLS layers need an API key, fall back to OSM. */
+/** Switch active base map. NLS layers work keyless via the worker proxy. */
 function setBasemap(key) {
   Object.values(layers).forEach(l => l && map.hasLayer(l) && map.removeLayer(l));
 
   if (key === 'mml-topo' || key === 'mml-bg') {
-    if (!state.apiKey) {
-      showToast('Enter an NLS API key to use Maanmittauslaitos maps');
-      key = 'osm';
-      basemapSelect.value = 'osm';
-    } else {
-      const layerName = key === 'mml-topo' ? 'maastokartta' : 'taustakartta';
-      layers[key] = buildMmlLayer(layerName);
-    }
+    const layerName = key === 'mml-topo' ? 'maastokartta' : 'taustakartta';
+    layers[key] = buildMmlLayer(layerName);
   }
 
   state.basemap = key;
@@ -292,8 +288,6 @@ function tileBoundsInTM35FIN(tileX, tileY, z) {
  * and the caller silently falls back to the Terrarium tile source.
  */
 async function fetchWcsDem(tileX, tileY, z) {
-  if (!state.apiKey) return null;
-
   const bounds = tileBoundsInTM35FIN(tileX, tileY, z);
 
   // Rough check: Finland's TM35FIN extent
@@ -315,17 +309,19 @@ async function fetchWcsDem(tileX, tileY, z) {
     CoverageID:  MML_COVERAGE,
     format:      'text/plain',
     SCALEFACTOR: sf,
-    'api-key':   state.apiKey,
   });
+  if (state.apiKey) params.set('api-key', state.apiKey);
   // URLSearchParams.append preserves duplicate keys (required by WCS 2.0)
   params.append('SUBSET', `E(${Math.round(bounds.minE)},${Math.round(bounds.maxE)})`);
   params.append('SUBSET', `N(${Math.round(bounds.minN)},${Math.round(bounds.maxN)})`);
+
+  const wcsBase = state.apiKey ? MML_WCS_BASE : `${NLS_PROXY_BASE}/ortokuvat-ja-korkeusmallit/wcs/v2`;
 
   const cacheKey = `wcs:${tileX}/${tileY}/${z}`;
   if (wcsCache.has(cacheKey)) return wcsCache.get(cacheKey);
 
   try {
-    const res = await fetch(`${MML_WCS_BASE}?${params}`, { signal: AbortSignal.timeout(8000) });
+    const res = await fetch(`${wcsBase}?${params}`, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
     const text = await res.text();
     const dem = parseAsciiGrid(text);
@@ -1004,6 +1000,11 @@ function applyApiKey(key) {
   } else {
     apiStatus.textContent = 'Not set';
     apiStatus.className   = 'api-badge api-none';
+    // Rebuild NLS layers back onto the keyless proxy
+    layers['mml-topo'] = null;
+    layers['mml-bg']   = null;
+    wcsCache.clear();
+    if (state.basemap === 'mml-topo' || state.basemap === 'mml-bg') setBasemap(state.basemap);
   }
 }
 
@@ -1620,8 +1621,8 @@ function init() {
     apiStatus.className   = 'api-badge api-set';
   }
 
-  // Load base map (prefer NLS topo if key exists, else Norway topo as a good free default)
-  const initialBasemap = state.apiKey ? 'mml-topo' : 'no-topo';
+  // NLS topo is the default — works keyless via the worker proxy
+  const initialBasemap = 'mml-topo';
   basemapSelect.value = initialBasemap;
   setBasemap(initialBasemap);
 
@@ -1665,7 +1666,7 @@ btnCompass.addEventListener('click', () => setMapBearing(0));
 /** Build a MapLibre style using the current basemap selection. */
 function build3DStyle() {
   let tiles, attribution;
-  if ((state.basemap === 'mml-topo' || state.basemap === 'mml-bg') && state.apiKey) {
+  if (state.basemap === 'mml-topo' || state.basemap === 'mml-bg') {
     const layer = state.basemap === 'mml-topo' ? 'maastokartta' : 'taustakartta';
     tiles       = [mmlUrl(layer)];
     attribution = '&copy; <a href="https://www.maanmittauslaitos.fi">Maanmittauslaitos</a>';
