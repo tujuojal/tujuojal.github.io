@@ -68,6 +68,9 @@ const MIN_SLOPE_ZOOM = 10;
 // Uses public tile URLs without authentication (limited to zoom level 12).
 // Shows where skiers/snowboarders actually go based on aggregated user activities.
 const STRAVA_HEATMAP_URL = 'https://heatmap-external-b.strava.com/tiles/all/hot/{z}/{x}/{y}.png';
+// CORS proxy (Cloudflare Worker) — Strava's CDN has no CORS headers, so the
+// 3D MapLibre view loads tiles through this instead. Edge-cached 24 h.
+const STRAVA_HEATMAP_PROXY_URL = 'https://powsurf-heatmap.powsurf-heatmap.workers.dev/{z}/{x}/{y}.png';
 const STRAVA_ATTRIB = 'Activity density &copy; <a href="https://www.strava.com">Strava</a>';
 
 // NVE "Bratthet med utløp" — single pre-rendered WMTS tileset combining steepness
@@ -1724,6 +1727,13 @@ function build3DStyle() {
         tileSize: 256,
         maxzoom: 18,
       },
+      'heatmap-3d': {
+        type: 'raster',
+        tiles: [STRAVA_HEATMAP_PROXY_URL],
+        tileSize: 256,
+        // Strava public tiles end at z11; MapLibre overzooms beyond this.
+        maxzoom: 11,
+      },
     },
     layers: [
       { id: 'basemap',        type: 'raster', source: 'basemap' },
@@ -1731,6 +1741,7 @@ function build3DStyle() {
       { id: 'aval-jp-slope',  type: 'raster', source: 'aval-jp-slope',  paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
       { id: 'aval-jp-hazard', type: 'raster', source: 'aval-jp-hazard', paint: { 'raster-opacity': 0.7  }, layout: { visibility: 'none' } },
       { id: 'slope-3d',       type: 'raster', source: 'slope-3d',       paint: { 'raster-opacity': 0.65 }, layout: { visibility: 'none' } },
+      { id: 'heatmap-3d',     type: 'raster', source: 'heatmap-3d',     paint: { 'raster-opacity': 0.6  }, layout: { visibility: 'none' } },
     ],
   };
 }
@@ -1773,51 +1784,11 @@ function _registerSlopeProtocol() {
   });
 }
 
-// Heatmap 3D overlay: Strava's CDN has no CORS headers so we can't feed
-// pixel data to MapLibre. Instead, a minimal Leaflet map (pointer-events:none)
-// sits on top of the MapLibre canvas and loads tiles the same way 2D does.
-let _heatmapOverlayEl  = null;
-let _heatmapOverlayMap = null;
-
-function _init3DHeatmapOverlay() {
-  if (_heatmapOverlayEl) return;
-
-  _heatmapOverlayEl = document.createElement('div');
-  _heatmapOverlayEl.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2;';
-  map3dEl.parentElement.appendChild(_heatmapOverlayEl);
-
-  _heatmapOverlayMap = L.map(_heatmapOverlayEl, {
-    zoomControl: false, attributionControl: false,
-    keyboard: false, dragging: false, scrollWheelZoom: false,
-    doubleClickZoom: false, touchZoom: false, tap: false,
-    fadeAnimation: false, zoomAnimation: false,
-  });
-
-  L.tileLayer(STRAVA_HEATMAP_URL, { opacity: 0.6, maxNativeZoom: 11, maxZoom: 19 }).addTo(_heatmapOverlayMap);
-  _heatmapOverlayMap.getContainer().style.background = 'transparent';
-}
-
-function _sync3DHeatmapOverlay() {
-  if (!_heatmapOverlayMap || !map3d) return;
-  const c = map3d.getCenter();
-  _heatmapOverlayMap.setView([c.lat, c.lng], map3d.getZoom(), { animate: false });
-}
-
 function _apply3DHeatmapLayer() {
-  const in3D = !map3dEl.classList.contains('hidden');
-  if (!in3D) return;
-
-  if (state.heatmapActive) {
-    if (!_heatmapOverlayEl) _init3DHeatmapOverlay();
-    _heatmapOverlayEl.style.display = '';
-    _heatmapOverlayMap.invalidateSize();
-    _sync3DHeatmapOverlay();
-    map3d.off('move', _sync3DHeatmapOverlay);
-    map3d.on('move', _sync3DHeatmapOverlay);
-  } else {
-    if (_heatmapOverlayEl) _heatmapOverlayEl.style.display = 'none';
-    if (map3d) map3d.off('move', _sync3DHeatmapOverlay);
-  }
+  // Guard on layer existence, not isStyleLoaded() — the latter is transiently
+  // false during the 'load' event while terrain DEM tiles are still coming in.
+  if (!map3d || !map3d.getLayer('heatmap-3d')) return;
+  map3d.setLayoutProperty('heatmap-3d', 'visibility', state.heatmapActive ? 'visible' : 'none');
 }
 
 function _apply3DSlopeLayer() {
@@ -1925,8 +1896,6 @@ btn3d.addEventListener('click', () => {
     // Restore 2D bearing from device heading if tracking
     if (_trackingOn && _deviceHead !== null) setMapBearing(_deviceHead);
     map3dEl.classList.add('hidden');
-    if (_heatmapOverlayEl) _heatmapOverlayEl.style.display = 'none';
-    if (map3d) map3d.off('move', _sync3DHeatmapOverlay);
     mapEl.classList.remove('hidden');
     btn3d.classList.remove('active');
     btn3d.setAttribute('aria-pressed', 'false');
