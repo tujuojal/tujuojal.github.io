@@ -96,7 +96,15 @@ const CACHE_MAX = 256;
 /* ─── App state ─────────────────────────────────────────────────────── */
 
 let _savedApiKey = '';
-try { _savedApiKey = localStorage.getItem('mml_api_key') || ''; } catch {}
+try {
+  _savedApiKey = localStorage.getItem('mml_api_key') || '';
+  // Purge the old revoked key (briefly shipped as a hardcoded default) —
+  // direct NLS requests with it would 403 and break the map layers.
+  if (_savedApiKey === 'd6c67bf9-7f85-469f-8dfc-2fae04fbbcce') {
+    _savedApiKey = '';
+    localStorage.removeItem('mml_api_key');
+  }
+} catch {}
 
 const state = {
   apiKey: _savedApiKey,
@@ -1614,11 +1622,11 @@ function showToast(msg) {
 /* ─── Initialise ─────────────────────────────────────────────────────── */
 
 function init() {
-  // Restore saved API key to input
+  // Show saved-key status without displaying the key itself
   if (state.apiKey) {
-    apiKeyInput.value     = state.apiKey;
     apiStatus.textContent = 'Set';
     apiStatus.className   = 'api-badge api-set';
+    apiKeyInput.placeholder = 'Key saved — paste a new key to replace';
   }
 
   // NLS topo is the default — works keyless via the worker proxy
