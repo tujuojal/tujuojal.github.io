@@ -92,11 +92,15 @@ const CACHE_MAX = 256;
 
 /* ─── App state ─────────────────────────────────────────────────────── */
 
+// Built-in NLS Finland API key — free tier, usage counts against the site
+// owner's account. Users can still override it via the panel input.
+const DEFAULT_MML_API_KEY = 'd6c67bf9-7f85-469f-8dfc-2fae04fbbcce';
+
 let _savedApiKey = '';
 try { _savedApiKey = localStorage.getItem('mml_api_key') || ''; } catch {}
 
 const state = {
-  apiKey: _savedApiKey,
+  apiKey: _savedApiKey || DEFAULT_MML_API_KEY,
   slopeActive:        false,
   minSlope:           15,
   maxSlope:           45,
