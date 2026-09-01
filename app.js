@@ -77,6 +77,12 @@ const STRAVA_HEATMAP_PROXY_URL = 'https://powsurf-heatmap.powsurf-heatmap.worker
 const NLS_PROXY_BASE = 'https://powsurf-heatmap.powsurf-heatmap.workers.dev/nls';
 const STRAVA_ATTRIB = 'Activity density &copy; <a href="https://www.strava.com">Strava</a>';
 
+// Same worker also exposes the login + trip-storage API. Points at a local
+// dev worker (`wrangler dev`, default port 8787) when served from localhost.
+const API_BASE = location.hostname === 'localhost'
+  ? 'http://localhost:8787/api'
+  : 'https://powsurf-heatmap.powsurf-heatmap.workers.dev/api';
+
 // NVE "Bratthet med utløp" — single pre-rendered WMTS tileset combining steepness
 // (colour-coded by angle) and avalanche runout zones. Same source as skimo.pro / Varsom.
 const NVE_BRATTHET_UTLOP_URL = 'https://gis3.nve.no/arcgis/rest/services/wmts/Bratthet_med_utlop_2024/MapServer/tile/{z}/{y}/{x}';
@@ -186,6 +192,12 @@ function setBasemap(key) {
   // so there's no risk of a broken style-swap state.
   if (map3d) {
     if (_3dLocActive) _remove3DLocMarker();
+    // These GeoJSON sources/layers belong to the map3d instance being
+    // destroyed below — reset the flags so they get re-added on rebuild
+    // instead of _update3DTrackLayer()/_update3DReplayLayer() wrongly
+    // thinking they're still present on the new instance.
+    _trackSrcAdded3D  = false;
+    _replaySrcAdded3D = false;
     const wasIn3D  = !map3dEl.classList.contains('hidden');
     const center3d = wasIn3D ? map3d.getCenter()  : null;
     const zoom3d   = wasIn3D ? map3d.getZoom()    : null;
@@ -202,6 +214,8 @@ function setBasemap(key) {
         map3d.setBearing(bear3d);
         map3d.resize();
         if (_trackingOn && _lastPos) _update3DLocMarker();
+        if (_recordingOn) _update3DTrackLayer();
+        if (_replayCoordinates) _update3DReplayLayer();
       });
     }
   }
@@ -1389,6 +1403,9 @@ function _stopOrientTracking() {
 }
 
 function _stopTracking() {
+  // GPS tracking is what feeds trip recording — if it stops, an in-progress
+  // recording can no longer receive fixes, so end it the same way Stop would.
+  if (_recordingOn) stopRecording();
   if (_watchId !== null) { navigator.geolocation.clearWatch(_watchId); _watchId = null; }
   _stopOrientTracking();
   if (_locMarker)   { map.removeLayer(_locMarker);   _locMarker   = null; }
@@ -1448,6 +1465,7 @@ btnLocate.addEventListener('click', async () => {
         }
       }
       _updateLocMarker(latlng, pos.coords.accuracy);
+      _onTrackFix(pos);
 
       // GPS course heading: valid when moving (non-null, non-NaN).
       // Used as arrow fallback when no compass sensor is available.
@@ -1574,6 +1592,674 @@ function showToast(msg) {
   toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, 3500);
 }
 
+/* ─── Account, trip recording & trip storage ─────────────────────────── */
+// Login is optional — everything above works exactly the same for an
+// anonymous user. This section only gates saving/listing/replaying trips.
+
+const authState = { token: null, user: null };
+
+// GPS fix history for the trip currently being recorded. Unlike _lastPos
+// (single latest fix, overwritten every update), this is the array that
+// makes "save a trip" possible at all — nothing like it existed before.
+let _recordingOn     = false;
+let _recordingPaused = false;
+let _trackPoints     = [];   // [{lat, lng, ele, t, speedKmh}]
+let _trackPolyline2D = null; // L.polyline, live-drawn on `map`
+let _trackSrcAdded3D = false;
+let _recordStartTs   = null;
+let _recordPausedMs  = 0;    // accumulated paused duration, subtracted from elapsed time
+let _pauseStartTs    = null;
+let _recordTimerId   = null; // ticks the record-bar elapsed/distance display
+
+let _replayPolyline2D  = null; // separate from _trackPolyline2D — viewing a saved/shared trip
+let _replaySrcAdded3D  = false;
+let _replayCoordinates = null; // [lng,lat,ele?] last drawn, re-applied across 2D/3D & basemap switches
+
+/* ── Small geo/format helpers (mirrors the Worker's computeTripStats math,
+     kept independent since this copy is only for the live in-progress
+     preview — the saved/canonical stats always come from the server). ── */
+
+function _haversineM(a, b) {
+  const R = 6371000;
+  const toRad = d => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function computeTripStatsClient(points) {
+  if (points.length < 2) return { distanceM: 0, durationS: 0 };
+  let distanceM = 0;
+  for (let i = 1; i < points.length; i++) distanceM += _haversineM(points[i - 1], points[i]);
+  const durationS = (points[points.length - 1].t - points[0].t) / 1000;
+  return { distanceM, durationS };
+}
+
+function _fmtElapsed(totalS) {
+  totalS = Math.max(0, Math.floor(totalS));
+  const h = Math.floor(totalS / 3600);
+  const m = Math.floor((totalS % 3600) / 60);
+  const s = totalS % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function _fmtDate(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function _defaultTripName() {
+  const d = new Date();
+  return `Trip ${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+/* ── 3D track layer (live recording) — mirrors _setup3DLocLayers/
+     _update3DLocMarker/_remove3DLocMarker's add-on-enter/remove-on-leave
+     lifecycle, but as a line source instead of a point. ── */
+
+const _3D_TRACK_SRC  = 'pows-track';
+const _3D_TRACK_LINE = 'pows-track-line';
+
+function _setup3DTrackLayer() {
+  if (!map3d || _trackSrcAdded3D) return;
+  if (!map3d.isStyleLoaded()) return;
+  map3d.addSource(_3D_TRACK_SRC, {
+    type: 'geojson',
+    data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] }, properties: {} },
+  });
+  map3d.addLayer({
+    id: _3D_TRACK_LINE, type: 'line', source: _3D_TRACK_SRC,
+    paint: { 'line-color': '#ff6b35', 'line-width': 4, 'line-opacity': 0.9 },
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+  });
+  _trackSrcAdded3D = true;
+}
+
+function _update3DTrackLayer() {
+  if (!map3d) return;
+  if (!_trackSrcAdded3D) _setup3DTrackLayer();
+  if (!_trackSrcAdded3D) return;
+  map3d.getSource(_3D_TRACK_SRC).setData({
+    type: 'Feature',
+    geometry: { type: 'LineString', coordinates: _trackPoints.map(p => [p.lng, p.lat]) },
+    properties: {},
+  });
+}
+
+function _remove3DTrackLayer() {
+  if (!map3d || !_trackSrcAdded3D) return;
+  if (map3d.getLayer(_3D_TRACK_LINE)) map3d.removeLayer(_3D_TRACK_LINE);
+  if (map3d.getSource(_3D_TRACK_SRC)) map3d.removeSource(_3D_TRACK_SRC);
+  _trackSrcAdded3D = false;
+}
+
+function _clearTrackLayers() {
+  if (_trackPolyline2D) { map.removeLayer(_trackPolyline2D); _trackPolyline2D = null; }
+  _remove3DTrackLayer();
+}
+
+function _appendTrackPointToLayers(point) {
+  if (_trackPolyline2D) _trackPolyline2D.addLatLng([point.lat, point.lng]);
+  if (map3d && !map3dEl.classList.contains('hidden')) _update3DTrackLayer();
+}
+
+/* ── Recording controls ── */
+
+const btnRecord        = document.getElementById('btn-record');
+const recordBarEl      = document.getElementById('record-bar');
+const recordElapsedEl  = document.getElementById('record-elapsed');
+const recordDistanceEl = document.getElementById('record-distance');
+const btnRecordPause   = document.getElementById('btn-record-pause');
+const btnRecordStop    = document.getElementById('btn-record-stop');
+
+function _updateRecordBarUI() {
+  if (!_recordingOn) return;
+  const elapsedS = _recordStartTs === null ? 0 :
+    ((_recordingPaused ? _pauseStartTs : Date.now()) - _recordStartTs - _recordPausedMs) / 1000;
+  recordElapsedEl.textContent = _fmtElapsed(elapsedS);
+  recordDistanceEl.textContent = (computeTripStatsClient(_trackPoints).distanceM / 1000).toFixed(2) + ' km';
+  btnRecordPause.textContent = _recordingPaused ? 'Resume' : 'Pause';
+}
+
+function _onTrackFix(pos) {
+  if (!_recordingOn || _recordingPaused) return;
+  const t = Date.now();
+  if (_recordStartTs === null) _recordStartTs = t;
+  const point = {
+    lat: pos.coords.latitude,
+    lng: pos.coords.longitude,
+    ele: typeof pos.coords.altitude === 'number' ? pos.coords.altitude : null,
+    t,
+    speedKmh: (typeof pos.coords.speed === 'number' && !isNaN(pos.coords.speed)) ? pos.coords.speed * 3.6 : undefined,
+  };
+  _trackPoints.push(point);
+  _appendTrackPointToLayers(point);
+  _updateRecordBarUI();
+}
+
+async function startRecording() {
+  if (_recordingOn) return;
+
+  if (!_trackingOn) {
+    // Reuse the existing locate button's permission/GPS-start flow rather
+    // than duplicating it — recording rides on the same watchPosition feed.
+    btnLocate.click();
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  _recordingOn     = true;
+  _recordingPaused = false;
+  _trackPoints     = [];
+  _recordStartTs   = null;
+  _recordPausedMs  = 0;
+  _pauseStartTs    = null;
+
+  _trackPolyline2D = L.polyline([], { color: '#ff6b35', weight: 4, opacity: 0.9 }).addTo(map);
+  if (map3d && !map3dEl.classList.contains('hidden')) _setup3DTrackLayer();
+
+  btnRecord.classList.add('active', 'recording');
+  btnRecord.setAttribute('aria-pressed', 'true');
+  recordBarEl.classList.remove('hidden');
+  btnRecordPause.textContent = 'Pause';
+  _updateRecordBarUI();
+  if (_recordTimerId) clearInterval(_recordTimerId);
+  _recordTimerId = setInterval(_updateRecordBarUI, 1000);
+}
+
+function pauseRecording() {
+  if (!_recordingOn || _recordingPaused) return;
+  _recordingPaused = true;
+  _pauseStartTs = Date.now();
+  _updateRecordBarUI();
+}
+
+function resumeRecording() {
+  if (!_recordingOn || !_recordingPaused) return;
+  _recordingPaused = false;
+  if (_pauseStartTs !== null) {
+    _recordPausedMs += Date.now() - _pauseStartTs;
+    _pauseStartTs = null;
+  }
+  _updateRecordBarUI();
+}
+
+function stopRecording() {
+  if (!_recordingOn) return;
+  _recordingOn = false;
+  _recordingPaused = false;
+  if (_recordTimerId) { clearInterval(_recordTimerId); _recordTimerId = null; }
+
+  btnRecord.classList.remove('active', 'recording');
+  btnRecord.setAttribute('aria-pressed', 'false');
+  recordBarEl.classList.add('hidden');
+
+  if (_trackPoints.length < 2) {
+    showToast('Recording too short to save');
+    _clearTrackLayers();
+    _trackPoints = [];
+    return;
+  }
+
+  // Persist immediately, before any save/login UI, so the draft survives a
+  // full-page OAuth redirect round-trip if the user isn't logged in yet.
+  try { localStorage.setItem('powsurf_draft_trip', JSON.stringify({ points: _trackPoints })); } catch {}
+
+  openSaveTripSheet();
+}
+
+function discardRecording() {
+  _clearTrackLayers();
+  _trackPoints = [];
+  try { localStorage.removeItem('powsurf_draft_trip'); } catch {}
+  closeSaveTripSheet();
+}
+
+function _resumeDraftAfterLogin() {
+  let raw = null;
+  try { raw = localStorage.getItem('powsurf_draft_trip'); } catch {}
+  if (!raw) return;
+  try {
+    const draft = JSON.parse(raw);
+    if (!Array.isArray(draft.points) || draft.points.length < 2) return;
+    _trackPoints = draft.points;
+    _trackPolyline2D = L.polyline(_trackPoints.map(p => [p.lat, p.lng]),
+      { color: '#ff6b35', weight: 4, opacity: 0.9 }).addTo(map);
+    if (map3d && !map3dEl.classList.contains('hidden')) _update3DTrackLayer();
+    openSaveTripSheet();
+  } catch {}
+}
+
+btnRecord.addEventListener('click', () => {
+  if (_recordingOn) stopRecording(); else startRecording();
+});
+btnRecordPause.addEventListener('click', () => {
+  if (_recordingPaused) resumeRecording(); else pauseRecording();
+});
+btnRecordStop.addEventListener('click', () => stopRecording());
+
+/* ── Auth: GitHub OAuth login, stateless JWT session ── */
+
+function apiFetch(path, opts = {}) {
+  const headers = new Headers(opts.headers || {});
+  if (authState.token) headers.set('Authorization', `Bearer ${authState.token}`);
+  return fetch(`${API_BASE}${path}`, { ...opts, headers });
+}
+
+function _saveAuthToken(token) {
+  authState.token = token;
+  try { localStorage.setItem('powsurf_auth_token', token); } catch {}
+}
+
+function _clearAuthToken() {
+  authState.token = null;
+  authState.user  = null;
+  try { localStorage.removeItem('powsurf_auth_token'); } catch {}
+}
+
+async function loadAuthFromStorage() {
+  let token = null;
+  try { token = localStorage.getItem('powsurf_auth_token'); } catch {}
+  if (!token) { _renderAccountUI(); return; }
+  authState.token = token;
+  try {
+    const res = await apiFetch('/me');
+    if (!res.ok) throw new Error('unauthorized');
+    authState.user = await res.json();
+  } catch {
+    _clearAuthToken();
+  }
+  _renderAccountUI();
+  if (authState.user) loadMyTrips();
+}
+
+/** Called once at startup. Returns true if this load is an OAuth redirect
+ *  (either outcome), so init() knows not to also call loadAuthFromStorage(). */
+function handleAuthRedirect() {
+  const hash = location.hash;
+
+  if (hash.startsWith('#auth=')) {
+    const token = decodeURIComponent(hash.slice('#auth='.length));
+    history.replaceState(null, '', location.pathname + location.search);
+    _saveAuthToken(token);
+    apiFetch('/me')
+      .then(res => (res.ok ? res.json() : Promise.reject(new Error('me_failed'))))
+      .then(user => {
+        authState.user = user;
+        _renderAccountUI();
+        loadMyTrips();
+        _resumeDraftAfterLogin();
+        openAccountPanel(true);
+      })
+      .catch(() => { _clearAuthToken(); _renderAccountUI(); showToast('Login failed — try again'); });
+    return true;
+  }
+
+  if (hash.startsWith('#authError=')) {
+    const reason = decodeURIComponent(hash.slice('#authError='.length));
+    history.replaceState(null, '', location.pathname + location.search);
+    showToast('Login failed (' + reason + ')');
+    return true;
+  }
+
+  return false;
+}
+
+function startLogin() {
+  const returnTo = location.origin + location.pathname + location.search;
+  location.href = `${API_BASE}/auth/github/start?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
+function logout() {
+  _clearAuthToken();
+  _renderAccountUI();
+  tripListEl.innerHTML = '';
+  tripListEmptyEl.classList.add('hidden');
+}
+
+/* ── Account panel (bottom sheet, same slide-up pattern as #panel) ── */
+
+const accountPanel       = document.getElementById('account-panel');
+const btnAccount         = document.getElementById('btn-account');
+const accountLoggedOutEl = document.getElementById('account-logged-out');
+const accountLoggedInEl  = document.getElementById('account-logged-in');
+const accountAvatarEl    = document.getElementById('account-avatar');
+const accountUsernameEl  = document.getElementById('account-username');
+const btnLoginGithub     = document.getElementById('btn-login-github');
+const btnLogoutEl        = document.getElementById('btn-logout');
+const tripListEl         = document.getElementById('trip-list');
+const tripListEmptyEl    = document.getElementById('trip-list-empty');
+
+let accountPanelOpen = false;
+
+function openAccountPanel(open) {
+  accountPanelOpen = open;
+  accountPanel.classList.toggle('panel-open', open);
+  accountPanel.classList.toggle('panel-collapsed', !open);
+}
+
+function _renderAccountUI() {
+  const loggedIn = !!authState.user;
+  accountLoggedOutEl.classList.toggle('hidden', loggedIn);
+  accountLoggedInEl.classList.toggle('hidden', !loggedIn);
+  if (loggedIn) {
+    accountUsernameEl.textContent = authState.user.username;
+    if (authState.user.avatarUrl) {
+      accountAvatarEl.src = authState.user.avatarUrl;
+      accountAvatarEl.classList.remove('hidden');
+    } else {
+      accountAvatarEl.classList.add('hidden');
+    }
+  }
+}
+
+btnAccount.addEventListener('click', () => openAccountPanel(!accountPanelOpen));
+btnLoginGithub.addEventListener('click', startLogin);
+btnLogoutEl.addEventListener('click', logout);
+
+document.addEventListener('click', e => {
+  if (accountPanelOpen && !accountPanel.contains(e.target) && !btnAccount.contains(e.target)) {
+    openAccountPanel(false);
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && accountPanelOpen) openAccountPanel(false);
+});
+
+/* ── Save-trip sheet (shown after Stop) ── */
+
+const saveTripSheet       = document.getElementById('save-trip-sheet');
+const saveTripLoggedInEl  = document.getElementById('save-trip-logged-in');
+const saveTripLoggedOutEl = document.getElementById('save-trip-logged-out');
+const saveTripStatsEl     = document.getElementById('save-trip-stats');
+const saveTripNameEl      = document.getElementById('save-trip-name');
+const saveTripNoteEl      = document.getElementById('save-trip-note');
+const btnSaveTrip         = document.getElementById('btn-save-trip');
+const btnDiscardTrip      = document.getElementById('btn-discard-trip');
+const btnDiscardTrip2     = document.getElementById('btn-discard-trip-2');
+const btnLoginToSave      = document.getElementById('btn-login-to-save');
+
+function openSaveTripSheet() {
+  saveTripSheet.classList.remove('panel-collapsed');
+  saveTripSheet.classList.add('panel-open');
+  const loggedIn = !!authState.user;
+  saveTripLoggedInEl.classList.toggle('hidden', !loggedIn);
+  saveTripLoggedOutEl.classList.toggle('hidden', loggedIn);
+  if (loggedIn) {
+    saveTripNameEl.value = _defaultTripName();
+    saveTripNoteEl.value = '';
+    const stats = computeTripStatsClient(_trackPoints);
+    saveTripStatsEl.textContent = `${(stats.distanceM / 1000).toFixed(2)} km · ${_fmtElapsed(stats.durationS)}`;
+  }
+}
+
+function closeSaveTripSheet() {
+  saveTripSheet.classList.remove('panel-open');
+  saveTripSheet.classList.add('panel-collapsed');
+}
+
+btnSaveTrip.addEventListener('click', saveTrip);
+btnDiscardTrip.addEventListener('click', discardRecording);
+btnDiscardTrip2.addEventListener('click', discardRecording);
+btnLoginToSave.addEventListener('click', startLogin);
+
+/* ── Save / list / delete / share / export trips ── */
+
+async function saveTrip() {
+  if (!authState.user || _trackPoints.length < 2) return;
+  const name = saveTripNameEl.value.trim() || 'Untitled trip';
+  const note = saveTripNoteEl.value.trim();
+
+  const path = {
+    geometry: { coordinates: _trackPoints.map(p => (typeof p.ele === 'number' ? [p.lng, p.lat, p.ele] : [p.lng, p.lat])) },
+    properties: {
+      timestamps: _trackPoints.map(p => p.t),
+      speeds_kmh: _trackPoints.map(p => (typeof p.speedKmh === 'number' ? p.speedKmh : null)),
+    },
+  };
+
+  try {
+    const res = await apiFetch('/trips', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, note: note || undefined, path }),
+    });
+    if (!res.ok) throw new Error('save_failed');
+    closeSaveTripSheet();
+    _clearTrackLayers();
+    _trackPoints = [];
+    try { localStorage.removeItem('powsurf_draft_trip'); } catch {}
+    showToast('Trip saved');
+    loadMyTrips();
+  } catch {
+    showToast('Could not save trip — try again');
+  }
+}
+
+async function loadMyTrips() {
+  if (!authState.user) return;
+  try {
+    const res = await apiFetch('/trips');
+    if (!res.ok) throw new Error('list_failed');
+    const { trips } = await res.json();
+    tripListEl.innerHTML = '';
+    tripListEmptyEl.classList.toggle('hidden', trips.length > 0);
+    trips.forEach(trip => tripListEl.appendChild(renderTripListItem(trip)));
+  } catch {
+    showToast('Could not load trips');
+  }
+}
+
+function renderTripListItem(trip) {
+  const el = document.createElement('div');
+  el.className = 'trip-item';
+
+  const header = document.createElement('div');
+  header.className = 'trip-item-header';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'trip-item-name';
+  nameEl.textContent = trip.name;
+  const dateEl = document.createElement('span');
+  dateEl.className = 'trip-item-date';
+  dateEl.textContent = _fmtDate(trip.startedAt);
+  header.append(nameEl, dateEl);
+
+  const stats = document.createElement('div');
+  stats.className = 'trip-item-stats';
+  const statParts = [
+    `${(trip.distanceM / 1000).toFixed(2)} km`,
+    _fmtElapsed(trip.durationS),
+  ];
+  if (trip.elevationGainM != null) statParts.push(`+${Math.round(trip.elevationGainM)} m`);
+  if (trip.maxSpeedKmh != null) statParts.push(`${trip.maxSpeedKmh.toFixed(1)} km/h max`);
+  statParts.forEach(text => {
+    const span = document.createElement('span');
+    span.textContent = text;
+    stats.appendChild(span);
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'trip-item-actions';
+
+  const btnReplay = document.createElement('button');
+  btnReplay.className = 'trip-action-btn';
+  btnReplay.type = 'button';
+  btnReplay.textContent = 'Replay';
+  btnReplay.addEventListener('click', () => replayTrip(trip.id));
+
+  const btnGpx = document.createElement('button');
+  btnGpx.className = 'trip-action-btn';
+  btnGpx.type = 'button';
+  btnGpx.textContent = 'GPX';
+  btnGpx.addEventListener('click', () => exportTrip(trip.id, trip.name, 'gpx'));
+
+  const btnGeo = document.createElement('button');
+  btnGeo.className = 'trip-action-btn';
+  btnGeo.type = 'button';
+  btnGeo.textContent = 'GeoJSON';
+  btnGeo.addEventListener('click', () => exportTrip(trip.id, trip.name, 'geojson'));
+
+  const btnShare = document.createElement('button');
+  btnShare.className = 'trip-action-btn' + (trip.visibility === 'public' ? ' active' : '');
+  btnShare.type = 'button';
+  btnShare.textContent = trip.visibility === 'public' ? 'Shared' : 'Share';
+  btnShare.addEventListener('click', async () => {
+    const next = trip.visibility === 'public' ? 'private' : 'public';
+    const updated = await setTripVisibility(trip.id, next);
+    if (!updated) return;
+    if (updated.visibility === 'public' && updated.shareUrl) {
+      try {
+        await navigator.clipboard.writeText(updated.shareUrl);
+        showToast('Share link copied');
+      } catch {
+        showToast(updated.shareUrl);
+      }
+    }
+    loadMyTrips();
+  });
+
+  const btnDelete = document.createElement('button');
+  btnDelete.className = 'trip-action-btn danger';
+  btnDelete.type = 'button';
+  btnDelete.textContent = 'Delete';
+  btnDelete.addEventListener('click', () => deleteTrip(trip.id));
+
+  actions.append(btnReplay, btnGpx, btnGeo, btnShare, btnDelete);
+  el.append(header, stats, actions);
+  return el;
+}
+
+async function setTripVisibility(id, visibility) {
+  try {
+    const res = await apiFetch(`/trips/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visibility }),
+    });
+    if (!res.ok) throw new Error('update_failed');
+    return await res.json();
+  } catch {
+    showToast('Could not update sharing');
+    return null;
+  }
+}
+
+async function deleteTrip(id) {
+  try {
+    const res = await apiFetch(`/trips/${id}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) throw new Error('delete_failed');
+    loadMyTrips();
+  } catch {
+    showToast('Could not delete trip');
+  }
+}
+
+async function exportTrip(id, name, format) {
+  try {
+    const res = await apiFetch(`/trips/${id}/export?format=${format}`);
+    if (!res.ok) throw new Error('export_failed');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(name || 'trip').replace(/[^a-z0-9]+/gi, '-')}.${format === 'gpx' ? 'gpx' : 'geojson'}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch {
+    showToast('Could not export trip');
+  }
+}
+
+/* ── Replay (view a saved or shared trip on the map) ── */
+
+const _3D_REPLAY_SRC  = 'pows-replay';
+const _3D_REPLAY_LINE = 'pows-replay-line';
+
+const shareBannerEl     = document.getElementById('share-banner');
+const shareBannerTextEl = document.getElementById('share-banner-text');
+const btnShareClose     = document.getElementById('btn-share-close');
+
+function _setup3DReplayLayer() {
+  if (!map3d || _replaySrcAdded3D) return;
+  if (!map3d.isStyleLoaded()) return;
+  map3d.addSource(_3D_REPLAY_SRC, {
+    type: 'geojson',
+    data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] }, properties: {} },
+  });
+  map3d.addLayer({
+    id: _3D_REPLAY_LINE, type: 'line', source: _3D_REPLAY_SRC,
+    paint: { 'line-color': '#4fc3f7', 'line-width': 4, 'line-opacity': 0.85 },
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+  });
+  _replaySrcAdded3D = true;
+}
+
+function _update3DReplayLayer() {
+  if (!map3d || !_replayCoordinates) return;
+  if (!_replaySrcAdded3D) _setup3DReplayLayer();
+  if (!_replaySrcAdded3D) return;
+  map3d.getSource(_3D_REPLAY_SRC).setData({
+    type: 'Feature', geometry: { type: 'LineString', coordinates: _replayCoordinates }, properties: {},
+  });
+}
+
+function _remove3DReplayLayer() {
+  if (!map3d || !_replaySrcAdded3D) return;
+  if (map3d.getLayer(_3D_REPLAY_LINE)) map3d.removeLayer(_3D_REPLAY_LINE);
+  if (map3d.getSource(_3D_REPLAY_SRC)) map3d.removeSource(_3D_REPLAY_SRC);
+  _replaySrcAdded3D = false;
+}
+
+function _drawReplayPath(coordinates) {
+  clearReplay();
+  _replayCoordinates = coordinates;
+  const latlngs = coordinates.map(c => [c[1], c[0]]);
+  _replayPolyline2D = L.polyline(latlngs, { color: '#4fc3f7', weight: 4, opacity: 0.85 }).addTo(map);
+  map.fitBounds(_replayPolyline2D.getBounds(), { padding: [40, 40] });
+  if (map3d && !map3dEl.classList.contains('hidden')) _update3DReplayLayer();
+}
+
+function clearReplay() {
+  if (_replayPolyline2D) { map.removeLayer(_replayPolyline2D); _replayPolyline2D = null; }
+  _remove3DReplayLayer();
+  _replayCoordinates = null;
+}
+
+async function replayTrip(id) {
+  try {
+    const res = await apiFetch(`/trips/${id}`);
+    if (!res.ok) throw new Error('get_failed');
+    const trip = await res.json();
+    _drawReplayPath(trip.path.geometry.coordinates);
+    openAccountPanel(false);
+  } catch {
+    showToast('Could not load trip');
+  }
+}
+
+async function loadSharedTrip(token) {
+  try {
+    const res = await fetch(`${API_BASE}/share/${token}`);
+    if (!res.ok) throw new Error('not_found');
+    const trip = await res.json();
+    _drawReplayPath(trip.path.geometry.coordinates);
+    shareBannerTextEl.textContent = `${trip.name} by ${trip.ownerName}`;
+    shareBannerEl.classList.remove('hidden');
+  } catch {
+    showToast('Shared trip not found');
+  }
+}
+
+btnShareClose.addEventListener('click', () => {
+  shareBannerEl.classList.add('hidden');
+  clearReplay();
+});
+
 /* ─── Initialise ─────────────────────────────────────────────────────── */
 
 function init() {
@@ -1583,6 +2269,12 @@ function init() {
   setBasemap(initialBasemap);
 
   updateZoomHint();
+
+  const cameFromAuthRedirect = handleAuthRedirect();
+  if (!cameFromAuthRedirect) loadAuthFromStorage();
+
+  const sharedTripToken = new URLSearchParams(location.search).get('trip');
+  if (sharedTripToken) loadSharedTrip(sharedTripToken);
 }
 
 const map3dEl = document.getElementById('map-3d');
@@ -1807,6 +2499,8 @@ function init3D() {
     _apply3DSlopeLayer();
     _apply3DHeatmapLayer();
     if (_trackingOn && _lastPos) _update3DLocMarker();
+    if (_recordingOn) _update3DTrackLayer();
+    if (_replayCoordinates) _update3DReplayLayer();
     map3d.on('zoomend', updateZoomHint);
     // Keep the direction arrow aligned when user two-finger rotates the 3D map
     map3d.on('rotate', () => {
@@ -1845,6 +2539,8 @@ btn3d.addEventListener('click', () => {
       _apply3DHeatmapLayer();
       // Restore location marker in 3D (arrow rotation handled by next orientation event)
       if (_trackingOn && _lastPos) _update3DLocMarker();
+      if (_recordingOn) _update3DTrackLayer();
+      if (_replayCoordinates) _update3DReplayLayer();
     });
   } else {
     // Switch 3D → 2D; sync position back to Leaflet
@@ -1854,6 +2550,8 @@ btn3d.addEventListener('click', () => {
     }
     // Remove the 3D marker; the 2D marker is already on the hidden Leaflet map
     _remove3DLocMarker();
+    _remove3DTrackLayer();
+    _remove3DReplayLayer();
     // Restore 2D bearing from device heading if tracking
     if (_trackingOn && _deviceHead !== null) setMapBearing(_deviceHead);
     map3dEl.classList.add('hidden');

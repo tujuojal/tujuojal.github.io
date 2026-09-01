@@ -60,6 +60,18 @@
             <path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
           </svg>
         </button>
+        <button id="btn-record" class="icon-btn" title="Record trip" aria-label="Start recording a GPS trip" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2"/>
+            <circle cx="12" cy="12" r="4" fill="currentColor"/>
+          </svg>
+        </button>
+        <button id="btn-account" class="icon-btn" title="Account &amp; trips" aria-label="Open account and trips panel">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="2"/>
+            <path d="M4.5 20c1.5-4 5-6 7.5-6s6 2 7.5 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
         <button id="btn-panel" class="icon-btn" title="Settings" aria-label="Open settings panel">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -84,8 +96,27 @@
       </div>
     </div>
 
+    <!-- Trip recording bar (slides down below topbar while recording) -->
+    <div id="record-bar" class="hidden" aria-label="Trip recording controls">
+      <div class="record-top">
+        <span class="record-dot" aria-hidden="true"></span>
+        <span id="record-elapsed" class="record-elapsed" aria-live="polite">00:00</span>
+        <span id="record-distance" class="record-distance">0.0 km</span>
+      </div>
+      <div class="record-actions">
+        <button id="btn-record-pause" class="record-btn" type="button">Pause</button>
+        <button id="btn-record-stop" class="record-btn record-btn-stop" type="button">Stop</button>
+      </div>
+    </div>
+
     <!-- Zoom info hint -->
     <div id="zoom-hint" class="hidden">Zoom in to calculate slopes</div>
+
+    <!-- Shared-trip banner (shown when opened via a ?trip= share link) -->
+    <div id="share-banner" class="hidden">
+      <span id="share-banner-text"></span>
+      <button id="btn-share-close" type="button" aria-label="Close shared trip view">&times;</button>
+    </div>
 
     <!-- Loading indicator -->
     <div id="loading-indicator" class="hidden">
@@ -302,6 +333,65 @@
           </select>
         </div>
 
+      </div>
+    </div>
+
+    <!-- Account & My Trips panel -->
+    <div id="account-panel" class="panel-collapsed">
+      <div id="account-panel-body">
+
+        <!-- Logged-out view -->
+        <div id="account-logged-out">
+          <div class="control-label">
+            <span class="label-text">Save your trips</span>
+            <span class="label-sub">Log in to record and revisit your GPS trips</span>
+          </div>
+          <button id="btn-login-github" class="wide-btn" type="button">Log in with GitHub</button>
+        </div>
+
+        <!-- Logged-in view -->
+        <div id="account-logged-in" class="hidden">
+          <div class="account-header">
+            <img id="account-avatar" class="account-avatar hidden" alt="">
+            <span id="account-username" class="label-text"></span>
+            <button id="btn-logout" class="text-btn" type="button">Log out</button>
+          </div>
+          <div class="divider"></div>
+          <div class="section-header">
+            <span class="section-title">My Trips</span>
+          </div>
+          <div id="trip-list"></div>
+          <div id="trip-list-empty" class="label-sub hidden">No saved trips yet — tap Record trip to start one.</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Save-trip sheet (shown after stopping a recording) -->
+    <div id="save-trip-sheet" class="panel-collapsed">
+      <div id="save-trip-body">
+        <div id="save-trip-logged-in">
+          <div class="section-header">
+            <span class="section-title">Save trip</span>
+          </div>
+          <div id="save-trip-stats" class="label-sub"></div>
+          <input id="save-trip-name" class="text-input" type="text" placeholder="Trip name" maxlength="200">
+          <textarea id="save-trip-note" class="text-input" placeholder="Note (optional)" maxlength="2000" rows="2"></textarea>
+          <div class="save-trip-actions">
+            <button id="btn-discard-trip" class="text-btn" type="button">Discard</button>
+            <button id="btn-save-trip" class="wide-btn" type="button">Save trip</button>
+          </div>
+        </div>
+        <div id="save-trip-logged-out" class="hidden">
+          <div class="control-label">
+            <span class="label-text">Log in to save this trip</span>
+            <span class="label-sub">Your recording is kept until you log in or discard it</span>
+          </div>
+          <div class="save-trip-actions">
+            <button id="btn-discard-trip-2" class="text-btn" type="button">Discard</button>
+            <button id="btn-login-to-save" class="wide-btn" type="button">Log in with GitHub</button>
+          </div>
+        </div>
       </div>
     </div>
 
