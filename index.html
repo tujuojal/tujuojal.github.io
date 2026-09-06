@@ -333,6 +333,27 @@
           </select>
         </div>
 
+        <div class="divider"></div>
+
+        <!-- NLS API key section -->
+        <div class="control-section" id="api-section">
+          <div class="section-header">
+            <span class="section-title">NLS Finland API Key</span>
+            <span id="api-status" class="api-badge api-none">Not set</span>
+          </div>
+          <div class="api-input-row">
+            <input type="text" id="api-key-input"
+                   placeholder="Paste your API key here"
+                   autocomplete="off" autocorrect="off" spellcheck="false"
+                   aria-label="NLS Finland API key">
+            <button id="btn-save-key" class="btn-primary" aria-label="Save API key">Save</button>
+          </div>
+          <a href="https://www.maanmittauslaitos.fi/rajapinnat/api-avaimen-ohje"
+             target="_blank" rel="noopener noreferrer" class="api-link">
+            Get a free API key from Maanmittauslaitos &rarr;
+          </a>
+        </div>
+
       </div>
     </div>
 

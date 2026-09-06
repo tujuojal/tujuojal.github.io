@@ -102,10 +102,22 @@ const CACHE_MAX = 256;
 
 /* ─── App state ─────────────────────────────────────────────────────── */
 
-// The own-key dialog was removed; clean up any key saved by older versions.
-try { localStorage.removeItem('mml_api_key'); } catch {}
+// Optional personal NLS API key. When set, NLS requests go directly to
+// Maanmittauslaitos with this key instead of through the worker proxy —
+// useful as a stopgap if the proxy's own key is unavailable.
+let _savedApiKey = '';
+try {
+  _savedApiKey = localStorage.getItem('mml_api_key') || '';
+  // Purge the old revoked key (briefly shipped as a hardcoded default) —
+  // direct NLS requests with it would 403 and break the map layers.
+  if (_savedApiKey === 'd6c67bf9-7f85-469f-8dfc-2fae04fbbcce') {
+    _savedApiKey = '';
+    localStorage.removeItem('mml_api_key');
+  }
+} catch {}
 
 const state = {
+  apiKey: _savedApiKey,
   slopeActive:        false,
   minSlope:           15,
   maxSlope:           45,
@@ -131,6 +143,9 @@ const map = L.map('map', {
 /* ─── Tile layers ────────────────────────────────────────────────────── */
 
 function mmlUrl(layer) {
+  if (state.apiKey) {
+    return `${MML_BASE}/${layer}/default/${MML_MATRIX}/{z}/{y}/{x}.png?api-key=${state.apiKey}`;
+  }
   return `${NLS_PROXY_BASE}/avoin/wmts/1.0.0/${layer}/default/${MML_MATRIX}/{z}/{y}/{x}.png`;
 }
 
@@ -321,11 +336,12 @@ async function fetchWcsDem(tileX, tileY, z) {
     format:      'text/plain',
     SCALEFACTOR: sf,
   });
+  if (state.apiKey) params.set('api-key', state.apiKey);
   // URLSearchParams.append preserves duplicate keys (required by WCS 2.0)
   params.append('SUBSET', `E(${Math.round(bounds.minE)},${Math.round(bounds.maxE)})`);
   params.append('SUBSET', `N(${Math.round(bounds.minN)},${Math.round(bounds.maxN)})`);
 
-  const wcsBase = `${NLS_PROXY_BASE}/ortokuvat-ja-korkeusmallit/wcs/v2`;
+  const wcsBase = state.apiKey ? MML_WCS_BASE : `${NLS_PROXY_BASE}/ortokuvat-ja-korkeusmallit/wcs/v2`;
 
   const cacheKey = `wcs:${tileX}/${tileY}/${z}`;
   if (wcsCache.has(cacheKey)) return wcsCache.get(cacheKey);
@@ -988,6 +1004,37 @@ basemapSelect.addEventListener('change', () => {
 });
 
 // API key
+const apiKeyInput  = document.getElementById('api-key-input');
+const btnSaveKey   = document.getElementById('btn-save-key');
+const apiStatus    = document.getElementById('api-status');
+
+function applyApiKey(key) {
+  state.apiKey = key.trim();
+  try { localStorage.setItem('mml_api_key', state.apiKey); } catch {}
+
+  // Rebuild NLS layers so they pick up the new URL (direct key vs. proxy)
+  layers['mml-topo'] = null;
+  layers['mml-bg']   = null;
+  wcsCache.clear();
+
+  if (state.apiKey) {
+    apiStatus.textContent = 'Set';
+    apiStatus.className   = 'api-badge api-set';
+    setBasemap('mml-topo');
+    basemapSelect.value = 'mml-topo';
+    showToast('API key saved — using direct NLS access.');
+  } else {
+    apiStatus.textContent = 'Not set';
+    apiStatus.className   = 'api-badge api-none';
+    // Rebuild NLS layers back onto the keyless proxy
+    if (state.basemap === 'mml-topo' || state.basemap === 'mml-bg') setBasemap(state.basemap);
+  }
+  if (state.slopeActive) redrawSlope();
+}
+
+btnSaveKey.addEventListener('click', () => applyApiKey(apiKeyInput.value));
+apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyApiKey(apiKeyInput.value); });
+
 // Shadow overlay
 const btnShadow      = document.getElementById('btn-shadow');
 const shadowBarEl    = document.getElementById('shadow-bar');
@@ -2263,6 +2310,13 @@ btnShareClose.addEventListener('click', () => {
 /* ─── Initialise ─────────────────────────────────────────────────────── */
 
 function init() {
+  // Show saved-key status without displaying the key itself
+  if (state.apiKey) {
+    apiStatus.textContent = 'Set';
+    apiStatus.className   = 'api-badge api-set';
+    apiKeyInput.placeholder = 'Key saved — paste a new key to replace';
+  }
+
   // NLS topo is the default — works keyless via the worker proxy
   const initialBasemap = 'mml-topo';
   basemapSelect.value = initialBasemap;
