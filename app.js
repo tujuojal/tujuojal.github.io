@@ -230,7 +230,7 @@ function setBasemap(key) {
         map3d.resize();
         if (_trackingOn && _lastPos) _update3DLocMarker();
         if (_recordingOn) _update3DTrackLayer();
-        if (_replayCoordinates) _update3DReplayLayer();
+        if (_replayPoints) _update3DReplayLayer();
       });
     }
   }
@@ -1650,17 +1650,19 @@ const authState = { token: null, user: null };
 // makes "save a trip" possible at all — nothing like it existed before.
 let _recordingOn     = false;
 let _recordingPaused = false;
-let _trackPoints     = [];   // [{lat, lng, ele, t, speedKmh}]
-let _trackPolyline2D = null; // L.polyline, live-drawn on `map`
+let _trackPoints     = [];   // [{lat, lng, ele, t, speedKmh, acc}]
+let _track2D         = null; // speed-coloured track (see _createSpeedTrack2D), live-drawn on `map`
+let _speedDisplayKmh = 0;    // smoothed current speed for the record bar
+let _maxSpeedKmh     = 0;
 let _trackSrcAdded3D = false;
 let _recordStartTs   = null;
 let _recordPausedMs  = 0;    // accumulated paused duration, subtracted from elapsed time
 let _pauseStartTs    = null;
 let _recordTimerId   = null; // ticks the record-bar elapsed/distance display
 
-let _replayPolyline2D  = null; // separate from _trackPolyline2D — viewing a saved/shared trip
+let _replay2D          = null; // separate from _track2D — viewing a saved/shared trip
 let _replaySrcAdded3D  = false;
-let _replayCoordinates = null; // [lng,lat,ele?] last drawn, re-applied across 2D/3D & basemap switches
+let _replayPoints      = null; // [{lat, lng, speedKmh}] last drawn, re-applied across 2D/3D & basemap switches
 
 /* ── Small geo/format helpers (mirrors the Worker's computeTripStats math,
      kept independent since this copy is only for the live in-progress
@@ -1704,6 +1706,121 @@ function _defaultTripName() {
   return `Trip ${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
+/* ── Speed: per-fix estimation and track colouring ── */
+
+// Fixes less accurate than this are dropped from the recording — a 50 m
+// position jump between 1 s fixes would otherwise read as a 180 km/h spike.
+const TRACK_MAX_ACCURACY_M = 25;
+// Fallback speed (when the device reports none) is averaged over this window.
+const SPEED_WINDOW_MS = 4000;
+// Look-back limit for the fallback — beyond this the previous fix is too stale.
+const SPEED_MAX_GAP_MS = 30000;
+// Smoothing factor for the live speed readout (raw values are still saved).
+const SPEED_DISPLAY_ALPHA = 0.4;
+
+const SPEED_RAMP = [  // [km/h, colour]: slow blue → fast red
+  [0,  [33, 150, 243]],
+  [15, [76, 175, 80]],
+  [30, [255, 235, 59]],
+  [45, [255, 152, 0]],
+  [60, [244, 67, 54]],
+];
+const SPEED_BIN_KMH  = 5;          // track colour changes in 5 km/h steps
+const NO_SPEED_COLOR = '#ff6b35';  // points with no speed at all
+
+function _speedColor(kmh) {
+  let i = 1;
+  while (i < SPEED_RAMP.length - 1 && kmh > SPEED_RAMP[i][0]) i++;
+  const [k0, c0] = SPEED_RAMP[i - 1];
+  const [k1, c1] = SPEED_RAMP[i];
+  const f = Math.min(1, Math.max(0, (kmh - k0) / (k1 - k0)));
+  const rgb = c0.map((v, j) => Math.round(v + (c1[j] - v) * f));
+  return `rgb(${rgb.join(',')})`;
+}
+
+// Quantising speed into bins lets consecutive same-bin points share one
+// polyline / GeoJSON feature instead of one per segment.
+function _speedBin(kmh) {
+  if (typeof kmh !== 'number' || !Number.isFinite(kmh)) return -1;
+  return Math.min(Math.floor(kmh / SPEED_BIN_KMH), SPEED_RAMP[SPEED_RAMP.length - 1][0] / SPEED_BIN_KMH);
+}
+
+function _binColor(bin) {
+  return bin < 0 ? NO_SPEED_COLOR : _speedColor(bin * SPEED_BIN_KMH + SPEED_BIN_KMH / 2);
+}
+
+/** Average speed (km/h) arriving at points[i] over the last SPEED_WINDOW_MS,
+ *  always using at least the previous fix. undefined if there's no usable one. */
+function _windowSpeedKmh(points, i) {
+  const p = points[i];
+  let j = i;
+  let distM = 0;
+  while (j > 0) {
+    const age = p.t - points[j - 1].t;
+    if (age > SPEED_MAX_GAP_MS || (j < i && age > SPEED_WINDOW_MS)) break;
+    distM += _haversineM(points[j - 1], points[j]);
+    j--;
+  }
+  const dtS = (p.t - points[j].t) / 1000;
+  return dtS >= 1 ? (distM / dtS) * 3.6 : undefined;
+}
+
+/** Fills in missing speeds (old trips, devices without Doppler speed) from
+ *  timestamps. Mutates and returns `points`; needs `t` on each point. */
+function _fillMissingSpeeds(points) {
+  points.forEach((p, i) => {
+    if (typeof p.speedKmh !== 'number' && typeof p.t === 'number') p.speedKmh = _windowSpeedKmh(points, i);
+  });
+  return points;
+}
+
+/** Splits points into runs of the same speed bin, each run starting at the
+ *  previous run's last point so the line stays continuous. */
+function _speedRuns(points) {
+  const runs = [];
+  let cur = null;
+  points.forEach((p, i) => {
+    const bin = _speedBin(p.speedKmh);
+    if (!cur || bin !== cur.bin) {
+      cur = { bin, points: i > 0 ? [points[i - 1]] : [] };
+      runs.push(cur);
+    }
+    cur.points.push(p);
+  });
+  return runs.filter(r => r.points.length >= 2);
+}
+
+function _speedRunsGeojson(points) {
+  return {
+    type: 'FeatureCollection',
+    features: _speedRuns(points).map(r => ({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: r.points.map(p => [p.lng, p.lat]) },
+      properties: { color: _binColor(r.bin) },
+    })),
+  };
+}
+
+/* ── 2D speed-coloured track: a featureGroup of polylines, one per speed-bin
+     run, extended in place as fixes arrive. ── */
+
+function _createSpeedTrack2D(points, opacity) {
+  const t = { group: L.featureGroup().addTo(map), line: null, bin: null, last: null, opacity };
+  points.forEach(p => _extendSpeedTrack2D(t, p));
+  return t;
+}
+
+function _extendSpeedTrack2D(t, p) {
+  const bin = _speedBin(p.speedKmh);
+  if (!t.line || bin !== t.bin) {
+    const start = t.last ? [[t.last.lat, t.last.lng]] : [];
+    t.line = L.polyline(start, { color: _binColor(bin), weight: 4, opacity: t.opacity }).addTo(t.group);
+    t.bin = bin;
+  }
+  t.line.addLatLng([p.lat, p.lng]);
+  t.last = p;
+}
+
 /* ── 3D track layer (live recording) — mirrors _setup3DLocLayers/
      _update3DLocMarker/_remove3DLocMarker's add-on-enter/remove-on-leave
      lifecycle, but as a line source instead of a point. ── */
@@ -1716,11 +1833,11 @@ function _setup3DTrackLayer() {
   if (!map3d.isStyleLoaded()) return;
   map3d.addSource(_3D_TRACK_SRC, {
     type: 'geojson',
-    data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] }, properties: {} },
+    data: { type: 'FeatureCollection', features: [] },
   });
   map3d.addLayer({
     id: _3D_TRACK_LINE, type: 'line', source: _3D_TRACK_SRC,
-    paint: { 'line-color': '#ff6b35', 'line-width': 4, 'line-opacity': 0.9 },
+    paint: { 'line-color': ['get', 'color'], 'line-width': 4, 'line-opacity': 0.9 },
     layout: { 'line-cap': 'round', 'line-join': 'round' },
   });
   _trackSrcAdded3D = true;
@@ -1730,11 +1847,7 @@ function _update3DTrackLayer() {
   if (!map3d) return;
   if (!_trackSrcAdded3D) _setup3DTrackLayer();
   if (!_trackSrcAdded3D) return;
-  map3d.getSource(_3D_TRACK_SRC).setData({
-    type: 'Feature',
-    geometry: { type: 'LineString', coordinates: _trackPoints.map(p => [p.lng, p.lat]) },
-    properties: {},
-  });
+  map3d.getSource(_3D_TRACK_SRC).setData(_speedRunsGeojson(_trackPoints));
 }
 
 function _remove3DTrackLayer() {
@@ -1745,12 +1858,12 @@ function _remove3DTrackLayer() {
 }
 
 function _clearTrackLayers() {
-  if (_trackPolyline2D) { map.removeLayer(_trackPolyline2D); _trackPolyline2D = null; }
+  if (_track2D) { map.removeLayer(_track2D.group); _track2D = null; }
   _remove3DTrackLayer();
 }
 
 function _appendTrackPointToLayers(point) {
-  if (_trackPolyline2D) _trackPolyline2D.addLatLng([point.lat, point.lng]);
+  if (_track2D) _extendSpeedTrack2D(_track2D, point);
   if (map3d && !map3dEl.classList.contains('hidden')) _update3DTrackLayer();
 }
 
@@ -1760,8 +1873,13 @@ const btnRecord        = document.getElementById('btn-record');
 const recordBarEl      = document.getElementById('record-bar');
 const recordElapsedEl  = document.getElementById('record-elapsed');
 const recordDistanceEl = document.getElementById('record-distance');
+const recordSpeedEl    = document.getElementById('record-speed');
+const recordMaxSpeedEl = document.getElementById('record-max-speed');
 const btnRecordPause   = document.getElementById('btn-record-pause');
 const btnRecordStop    = document.getElementById('btn-record-stop');
+
+// Live speed reads "–" once the newest accepted fix is older than this.
+const SPEED_STALE_MS = 10000;
 
 function _updateRecordBarUI() {
   if (!_recordingOn) return;
@@ -1769,21 +1887,38 @@ function _updateRecordBarUI() {
     ((_recordingPaused ? _pauseStartTs : Date.now()) - _recordStartTs - _recordPausedMs) / 1000;
   recordElapsedEl.textContent = _fmtElapsed(elapsedS);
   recordDistanceEl.textContent = (computeTripStatsClient(_trackPoints).distanceM / 1000).toFixed(2) + ' km';
+  const last = _trackPoints[_trackPoints.length - 1];
+  const fresh = !_recordingPaused && last && Date.now() - last.t < SPEED_STALE_MS;
+  recordSpeedEl.textContent = fresh ? Math.round(_speedDisplayKmh) : '–';
+  recordMaxSpeedEl.textContent = Math.round(_maxSpeedKmh);
   btnRecordPause.textContent = _recordingPaused ? 'Resume' : 'Pause';
 }
 
 function _onTrackFix(pos) {
   if (!_recordingOn || _recordingPaused) return;
+  const acc = pos.coords.accuracy;
+  if (typeof acc === 'number' && acc > TRACK_MAX_ACCURACY_M) return;
   const t = Date.now();
   if (_recordStartTs === null) _recordStartTs = t;
+  // Doppler speed from the GPS chip is the most accurate source; iOS reports
+  // -1 and others null when it's unavailable.
+  const gpsSpeed = pos.coords.speed;
   const point = {
     lat: pos.coords.latitude,
     lng: pos.coords.longitude,
     ele: typeof pos.coords.altitude === 'number' ? pos.coords.altitude : null,
     t,
-    speedKmh: (typeof pos.coords.speed === 'number' && !isNaN(pos.coords.speed)) ? pos.coords.speed * 3.6 : undefined,
+    speedKmh: (typeof gpsSpeed === 'number' && gpsSpeed >= 0) ? gpsSpeed * 3.6 : undefined,
+    acc: typeof acc === 'number' ? acc : null,
   };
   _trackPoints.push(point);
+  if (point.speedKmh === undefined) point.speedKmh = _windowSpeedKmh(_trackPoints, _trackPoints.length - 1);
+  if (typeof point.speedKmh === 'number') {
+    _speedDisplayKmh = _trackPoints.length > 1
+      ? _speedDisplayKmh + SPEED_DISPLAY_ALPHA * (point.speedKmh - _speedDisplayKmh)
+      : point.speedKmh;
+    _maxSpeedKmh = Math.max(_maxSpeedKmh, point.speedKmh);
+  }
   _appendTrackPointToLayers(point);
   _updateRecordBarUI();
 }
@@ -1804,8 +1939,10 @@ async function startRecording() {
   _recordStartTs   = null;
   _recordPausedMs  = 0;
   _pauseStartTs    = null;
+  _speedDisplayKmh = 0;
+  _maxSpeedKmh     = 0;
 
-  _trackPolyline2D = L.polyline([], { color: '#ff6b35', weight: 4, opacity: 0.9 }).addTo(map);
+  _track2D = _createSpeedTrack2D([], 0.9);
   if (map3d && !map3dEl.classList.contains('hidden')) _setup3DTrackLayer();
 
   btnRecord.classList.add('active', 'recording');
@@ -1873,8 +2010,7 @@ function _resumeDraftAfterLogin() {
     const draft = JSON.parse(raw);
     if (!Array.isArray(draft.points) || draft.points.length < 2) return;
     _trackPoints = draft.points;
-    _trackPolyline2D = L.polyline(_trackPoints.map(p => [p.lat, p.lng]),
-      { color: '#ff6b35', weight: 4, opacity: 0.9 }).addTo(map);
+    _track2D = _createSpeedTrack2D(_trackPoints, 0.9);
     if (map3d && !map3dEl.classList.contains('hidden')) _update3DTrackLayer();
     openSaveTripSheet();
   } catch {}
@@ -2039,7 +2175,9 @@ function openSaveTripSheet() {
     saveTripNameEl.value = _defaultTripName();
     saveTripNoteEl.value = '';
     const stats = computeTripStatsClient(_trackPoints);
-    saveTripStatsEl.textContent = `${(stats.distanceM / 1000).toFixed(2)} km · ${_fmtElapsed(stats.durationS)}`;
+    const maxKmh = _trackPoints.reduce((m, p) => (typeof p.speedKmh === 'number' ? Math.max(m, p.speedKmh) : m), 0);
+    saveTripStatsEl.textContent =
+      `${(stats.distanceM / 1000).toFixed(2)} km · ${_fmtElapsed(stats.durationS)} · ${Math.round(maxKmh)} km/h max`;
   }
 }
 
@@ -2236,23 +2374,21 @@ function _setup3DReplayLayer() {
   if (!map3d.isStyleLoaded()) return;
   map3d.addSource(_3D_REPLAY_SRC, {
     type: 'geojson',
-    data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] }, properties: {} },
+    data: { type: 'FeatureCollection', features: [] },
   });
   map3d.addLayer({
     id: _3D_REPLAY_LINE, type: 'line', source: _3D_REPLAY_SRC,
-    paint: { 'line-color': '#4fc3f7', 'line-width': 4, 'line-opacity': 0.85 },
+    paint: { 'line-color': ['get', 'color'], 'line-width': 4, 'line-opacity': 0.85 },
     layout: { 'line-cap': 'round', 'line-join': 'round' },
   });
   _replaySrcAdded3D = true;
 }
 
 function _update3DReplayLayer() {
-  if (!map3d || !_replayCoordinates) return;
+  if (!map3d || !_replayPoints) return;
   if (!_replaySrcAdded3D) _setup3DReplayLayer();
   if (!_replaySrcAdded3D) return;
-  map3d.getSource(_3D_REPLAY_SRC).setData({
-    type: 'Feature', geometry: { type: 'LineString', coordinates: _replayCoordinates }, properties: {},
-  });
+  map3d.getSource(_3D_REPLAY_SRC).setData(_speedRunsGeojson(_replayPoints));
 }
 
 function _remove3DReplayLayer() {
@@ -2262,19 +2398,32 @@ function _remove3DReplayLayer() {
   _replaySrcAdded3D = false;
 }
 
-function _drawReplayPath(coordinates) {
+/** Saved-trip path (GeoJSON Feature from the Worker) → points with speed,
+ *  deriving any missing speeds from the stored timestamps. */
+function _pointsFromTripPath(path) {
+  const props      = path.properties || {};
+  const timestamps = Array.isArray(props.timestamps) ? props.timestamps : [];
+  const speeds     = Array.isArray(props.speeds_kmh) ? props.speeds_kmh : [];
+  return _fillMissingSpeeds(path.geometry.coordinates.map((c, i) => ({
+    lng: c[0],
+    lat: c[1],
+    t: timestamps[i],
+    speedKmh: typeof speeds[i] === 'number' ? speeds[i] : undefined,
+  })));
+}
+
+function _drawReplayPath(path) {
   clearReplay();
-  _replayCoordinates = coordinates;
-  const latlngs = coordinates.map(c => [c[1], c[0]]);
-  _replayPolyline2D = L.polyline(latlngs, { color: '#4fc3f7', weight: 4, opacity: 0.85 }).addTo(map);
-  map.fitBounds(_replayPolyline2D.getBounds(), { padding: [40, 40] });
+  _replayPoints = _pointsFromTripPath(path);
+  _replay2D = _createSpeedTrack2D(_replayPoints, 0.85);
+  map.fitBounds(_replay2D.group.getBounds(), { padding: [40, 40] });
   if (map3d && !map3dEl.classList.contains('hidden')) _update3DReplayLayer();
 }
 
 function clearReplay() {
-  if (_replayPolyline2D) { map.removeLayer(_replayPolyline2D); _replayPolyline2D = null; }
+  if (_replay2D) { map.removeLayer(_replay2D.group); _replay2D = null; }
   _remove3DReplayLayer();
-  _replayCoordinates = null;
+  _replayPoints = null;
 }
 
 async function replayTrip(id) {
@@ -2282,7 +2431,7 @@ async function replayTrip(id) {
     const res = await apiFetch(`/trips/${id}`);
     if (!res.ok) throw new Error('get_failed');
     const trip = await res.json();
-    _drawReplayPath(trip.path.geometry.coordinates);
+    _drawReplayPath(trip.path);
     openAccountPanel(false);
   } catch {
     showToast('Could not load trip');
@@ -2294,7 +2443,7 @@ async function loadSharedTrip(token) {
     const res = await fetch(`${API_BASE}/share/${token}`);
     if (!res.ok) throw new Error('not_found');
     const trip = await res.json();
-    _drawReplayPath(trip.path.geometry.coordinates);
+    _drawReplayPath(trip.path);
     shareBannerTextEl.textContent = `${trip.name} by ${trip.ownerName}`;
     shareBannerEl.classList.remove('hidden');
   } catch {
@@ -2554,7 +2703,7 @@ function init3D() {
     _apply3DHeatmapLayer();
     if (_trackingOn && _lastPos) _update3DLocMarker();
     if (_recordingOn) _update3DTrackLayer();
-    if (_replayCoordinates) _update3DReplayLayer();
+    if (_replayPoints) _update3DReplayLayer();
     map3d.on('zoomend', updateZoomHint);
     // Keep the direction arrow aligned when user two-finger rotates the 3D map
     map3d.on('rotate', () => {
@@ -2594,7 +2743,7 @@ btn3d.addEventListener('click', () => {
       // Restore location marker in 3D (arrow rotation handled by next orientation event)
       if (_trackingOn && _lastPos) _update3DLocMarker();
       if (_recordingOn) _update3DTrackLayer();
-      if (_replayCoordinates) _update3DReplayLayer();
+      if (_replayPoints) _update3DReplayLayer();
     });
   } else {
     // Switch 3D → 2D; sync position back to Leaflet
