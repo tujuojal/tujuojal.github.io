@@ -1875,6 +1875,144 @@ function _appendTrackPointToLayers(point) {
   if (map3d && !map3dEl.classList.contains('hidden')) _update3DTrackLayer();
 }
 
+/* ── On-device persistence (IndexedDB) ──
+   recPoints   : every accepted fix of the current recording, appended as it
+                 arrives, so a killed/reloaded tab loses nothing.
+   kv/recMeta  : timing state of that recording, plus `stopped` once it's
+                 waiting in the save sheet.
+   uploadQueue : trips saved while offline, uploaded when back online.
+   localStorage would hit its ~5 MB cap on a long day of 1 Hz fixes. */
+
+let _idbPromise = null;
+
+function _idb() {
+  if (!_idbPromise) {
+    _idbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open('powsurf', 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        db.createObjectStore('recPoints', { autoIncrement: true });
+        db.createObjectStore('kv');
+        db.createObjectStore('uploadQueue', { keyPath: 'localId' });
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  return _idbPromise;
+}
+
+/** Runs fn(tx) in one transaction; resolves with the result of the IDBRequest
+ *  fn returns (if any) once the transaction commits. */
+async function _idbTx(stores, mode, fn) {
+  const db = await _idb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(stores, mode);
+    const req = fn(tx);
+    tx.oncomplete = () => resolve(req ? req.result : undefined);
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}
+
+function _persistRecMeta(stopped = false) {
+  const meta = {
+    startTs: _recordStartTs, pausedMs: _recordPausedMs,
+    pauseStartTs: _pauseStartTs, paused: _recordingPaused, stopped,
+  };
+  _idbTx('kv', 'readwrite', tx => { tx.objectStore('kv').put(meta, 'recMeta'); }).catch(() => {});
+}
+
+function _persistTrackPoint(point) {
+  _idbTx('recPoints', 'readwrite', tx => { tx.objectStore('recPoints').add(point); }).catch(() => {});
+}
+
+function _clearPersistedRecording() {
+  return _idbTx(['recPoints', 'kv'], 'readwrite', tx => {
+    tx.objectStore('recPoints').clear();
+    tx.objectStore('kv').delete('recMeta');
+  }).catch(() => {});
+}
+
+/** Brings back a recording that was in progress or waiting to be saved when
+ *  the page last closed. In-progress ones come back paused, since GPS
+ *  stopped with the page. */
+async function _restorePersistedRecording() {
+  // Drafts from before the IndexedDB move were kept in localStorage.
+  let legacy = null;
+  try { legacy = JSON.parse(localStorage.getItem('powsurf_draft_trip')); } catch {}
+
+  let meta, points;
+  try {
+    [meta, points] = await Promise.all([
+      _idbTx('kv', 'readonly', tx => tx.objectStore('kv').get('recMeta')),
+      _idbTx('recPoints', 'readonly', tx => tx.objectStore('recPoints').getAll()),
+    ]);
+  } catch {
+    return;
+  }
+  if (legacy && Array.isArray(legacy.points) && legacy.points.length >= 2 && !(meta && points.length)) {
+    meta = { stopped: true };
+    points = legacy.points;
+    await _idbTx(['recPoints', 'kv'], 'readwrite', tx => {
+      points.forEach(p => tx.objectStore('recPoints').add(p));
+      tx.objectStore('kv').put(meta, 'recMeta');
+    }).catch(() => {});
+  }
+  try { localStorage.removeItem('powsurf_draft_trip'); } catch {}
+
+  if (!meta || !points || points.length < 2 || _recordingOn) return;
+
+  _trackPoints = points;
+  _clearTrackLayers();
+  _track2D = _createSpeedTrack2D(_trackPoints, 0.9);
+  if (map3d && !map3dEl.classList.contains('hidden')) _update3DTrackLayer();
+
+  if (meta.stopped) {
+    openSaveTripSheet();
+    return;
+  }
+
+  _recordingOn     = true;
+  _recordingPaused = true;
+  _recordStartTs   = meta.startTs ?? points[0].t;
+  _recordPausedMs  = meta.pausedMs || 0;
+  // Time the page was closed counts as paused, not as trip time.
+  _pauseStartTs    = meta.paused && meta.pauseStartTs != null ? meta.pauseStartTs : points[points.length - 1].t;
+  _maxSpeedKmh     = points.reduce((m, p) => (typeof p.speedKmh === 'number' ? Math.max(m, p.speedKmh) : m), 0);
+  _speedDisplayKmh = 0;
+  _persistRecMeta();
+
+  btnRecord.classList.add('active', 'recording');
+  btnRecord.setAttribute('aria-pressed', 'true');
+  recordBarEl.classList.remove('hidden');
+  _updateRecordBarUI();
+  if (_recordTimerId) clearInterval(_recordTimerId);
+  _recordTimerId = setInterval(_updateRecordBarUI, 1000);
+  showToast('Recording restored — tap Resume to continue');
+}
+
+/* ── Screen wake lock: GPS updates stop when the screen locks (always on
+     iOS, often on Android), so keep it on while actively recording. ── */
+
+let _wakeLock = null;
+
+async function _acquireWakeLock() {
+  if (!('wakeLock' in navigator) || _wakeLock) return;
+  try {
+    _wakeLock = await navigator.wakeLock.request('screen');
+    _wakeLock.addEventListener('release', () => { _wakeLock = null; });
+  } catch {}
+}
+
+function _releaseWakeLock() {
+  if (_wakeLock) { _wakeLock.release().catch(() => {}); _wakeLock = null; }
+}
+
+// The browser drops the lock whenever the page is hidden.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && _recordingOn && !_recordingPaused) _acquireWakeLock();
+});
+
 /* ── Recording controls ── */
 
 const btnRecord        = document.getElementById('btn-record');
@@ -1907,7 +2045,7 @@ function _onTrackFix(pos) {
   const acc = pos.coords.accuracy;
   if (typeof acc === 'number' && acc > TRACK_MAX_ACCURACY_M) return;
   const t = Date.now();
-  if (_recordStartTs === null) _recordStartTs = t;
+  if (_recordStartTs === null) { _recordStartTs = t; _persistRecMeta(); }
   // Doppler speed from the GPS chip is the most accurate source; iOS reports
   // -1 and others null when it's unavailable.
   const gpsSpeed = pos.coords.speed;
@@ -1927,6 +2065,7 @@ function _onTrackFix(pos) {
       : point.speedKmh;
     _maxSpeedKmh = Math.max(_maxSpeedKmh, point.speedKmh);
   }
+  _persistTrackPoint(point);
   _appendTrackPointToLayers(point);
   _updateRecordBarUI();
 }
@@ -1949,6 +2088,11 @@ async function startRecording() {
   _pauseStartTs    = null;
   _speedDisplayKmh = 0;
   _maxSpeedKmh     = 0;
+  // Ordered before any fix can be persisted: clear runs in its own
+  // transaction, and IndexedDB commits transactions in creation order.
+  _clearPersistedRecording();
+  _persistRecMeta();
+  _acquireWakeLock();
 
   _track2D = _createSpeedTrack2D([], 0.9);
   if (map3d && !map3dEl.classList.contains('hidden')) _setup3DTrackLayer();
@@ -1966,16 +2110,22 @@ function pauseRecording() {
   if (!_recordingOn || _recordingPaused) return;
   _recordingPaused = true;
   _pauseStartTs = Date.now();
+  _persistRecMeta();
+  _releaseWakeLock();
   _updateRecordBarUI();
 }
 
 function resumeRecording() {
   if (!_recordingOn || !_recordingPaused) return;
+  // A recording restored after a reload has no GPS feed yet.
+  if (!_trackingOn) btnLocate.click();
   _recordingPaused = false;
   if (_pauseStartTs !== null) {
     _recordPausedMs += Date.now() - _pauseStartTs;
     _pauseStartTs = null;
   }
+  _persistRecMeta();
+  _acquireWakeLock();
   _updateRecordBarUI();
 }
 
@@ -1984,6 +2134,7 @@ function stopRecording() {
   _recordingOn = false;
   _recordingPaused = false;
   if (_recordTimerId) { clearInterval(_recordTimerId); _recordTimerId = null; }
+  _releaseWakeLock();
 
   btnRecord.classList.remove('active', 'recording');
   btnRecord.setAttribute('aria-pressed', 'false');
@@ -1993,12 +2144,13 @@ function stopRecording() {
     showToast('Recording too short to save');
     _clearTrackLayers();
     _trackPoints = [];
+    _clearPersistedRecording();
     return;
   }
 
-  // Persist immediately, before any save/login UI, so the draft survives a
-  // full-page OAuth redirect round-trip if the user isn't logged in yet.
-  try { localStorage.setItem('powsurf_draft_trip', JSON.stringify({ points: _trackPoints })); } catch {}
+  // The points are already on the device — marking the recording stopped
+  // makes a reload (e.g. the OAuth login redirect) reopen the save sheet.
+  _persistRecMeta(true);
 
   openSaveTripSheet();
 }
@@ -2006,22 +2158,8 @@ function stopRecording() {
 function discardRecording() {
   _clearTrackLayers();
   _trackPoints = [];
-  try { localStorage.removeItem('powsurf_draft_trip'); } catch {}
+  _clearPersistedRecording();
   closeSaveTripSheet();
-}
-
-function _resumeDraftAfterLogin() {
-  let raw = null;
-  try { raw = localStorage.getItem('powsurf_draft_trip'); } catch {}
-  if (!raw) return;
-  try {
-    const draft = JSON.parse(raw);
-    if (!Array.isArray(draft.points) || draft.points.length < 2) return;
-    _trackPoints = draft.points;
-    _track2D = _createSpeedTrack2D(_trackPoints, 0.9);
-    if (map3d && !map3dEl.classList.contains('hidden')) _update3DTrackLayer();
-    openSaveTripSheet();
-  } catch {}
 }
 
 btnRecord.addEventListener('click', () => {
@@ -2048,7 +2186,16 @@ function _saveAuthToken(token) {
 function _clearAuthToken() {
   authState.token = null;
   authState.user  = null;
-  try { localStorage.removeItem('powsurf_auth_token'); } catch {}
+  try {
+    localStorage.removeItem('powsurf_auth_token');
+    localStorage.removeItem('powsurf_auth_user');
+  } catch {}
+}
+
+// The profile is cached so the app stays logged in without signal —
+// trips recorded offline can then be saved (queued) on the spot.
+function _cacheAuthUser(user) {
+  try { localStorage.setItem('powsurf_auth_user', JSON.stringify(user)); } catch {}
 }
 
 async function loadAuthFromStorage() {
@@ -2058,13 +2205,23 @@ async function loadAuthFromStorage() {
   authState.token = token;
   try {
     const res = await apiFetch('/me');
-    if (!res.ok) throw new Error('unauthorized');
-    authState.user = await res.json();
+    if (res.status === 401 || res.status === 403) {
+      _clearAuthToken();
+    } else if (res.ok) {
+      authState.user = await res.json();
+      _cacheAuthUser(authState.user);
+    } else {
+      throw new Error('me_failed');
+    }
   } catch {
-    _clearAuthToken();
+    // Offline or server trouble — not a sign the session is invalid.
+    try { authState.user = JSON.parse(localStorage.getItem('powsurf_auth_user')); } catch {}
   }
   _renderAccountUI();
-  if (authState.user) loadMyTrips();
+  if (authState.user) {
+    loadMyTrips();
+    flushUploadQueue();
+  }
 }
 
 /** Called once at startup. Returns true if this load is an OAuth redirect
@@ -2080,9 +2237,10 @@ function handleAuthRedirect() {
       .then(res => (res.ok ? res.json() : Promise.reject(new Error('me_failed'))))
       .then(user => {
         authState.user = user;
+        _cacheAuthUser(user);
         _renderAccountUI();
         loadMyTrips();
-        _resumeDraftAfterLogin();
+        flushUploadQueue();
         openAccountPanel(true);
       })
       .catch(() => { _clearAuthToken(); _renderAccountUI(); showToast('Login failed — try again'); });
@@ -2134,6 +2292,8 @@ function openAccountPanel(open) {
 
 function _renderAccountUI() {
   const loggedIn = !!authState.user;
+  // A restored draft may already be showing the save sheet's logged-out view.
+  if (saveTripSheet.classList.contains('panel-open')) openSaveTripSheet();
   accountLoggedOutEl.classList.toggle('hidden', loggedIn);
   accountLoggedInEl.classList.toggle('hidden', !loggedIn);
   if (loggedIn) {
@@ -2201,49 +2361,174 @@ btnLoginToSave.addEventListener('click', startLogin);
 
 /* ── Save / list / delete / share / export trips ── */
 
-async function saveTrip() {
-  if (!authState.user || _trackPoints.length < 2) return;
-  const name = saveTripNameEl.value.trim() || 'Untitled trip';
-  const note = saveTripNoteEl.value.trim();
-
-  const path = {
-    geometry: { coordinates: _trackPoints.map(p => (typeof p.ele === 'number' ? [p.lng, p.lat, p.ele] : [p.lng, p.lat])) },
-    properties: {
-      timestamps: _trackPoints.map(p => p.t),
-      speeds_kmh: _trackPoints.map(p => (typeof p.speedKmh === 'number' ? p.speedKmh : null)),
+function _tripBody(points, name, note) {
+  return {
+    name,
+    note: note || undefined,
+    path: {
+      geometry: { coordinates: points.map(p => (typeof p.ele === 'number' ? [p.lng, p.lat, p.ele] : [p.lng, p.lat])) },
+      properties: {
+        timestamps: points.map(p => p.t),
+        speeds_kmh: points.map(p => (typeof p.speedKmh === 'number' ? p.speedKmh : null)),
+      },
     },
   };
+}
 
+function _postTrip(body) {
+  return apiFetch('/trips', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    // Weak signal can leave a request hanging for minutes — give up and
+    // queue it instead of leaving the save button looking stuck.
+    signal: AbortSignal.timeout(20000),
+  });
+}
+
+function _finishSavedRecording() {
+  closeSaveTripSheet();
+  _clearTrackLayers();
+  _trackPoints = [];
+  _clearPersistedRecording();
+}
+
+async function saveTrip() {
+  if (!authState.user || _trackPoints.length < 2 || btnSaveTrip.disabled) return;
+  btnSaveTrip.disabled = true;
   try {
-    const res = await apiFetch('/trips', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, note: note || undefined, path }),
-    });
-    if (!res.ok) throw new Error('save_failed');
-    closeSaveTripSheet();
-    _clearTrackLayers();
-    _trackPoints = [];
-    try { localStorage.removeItem('powsurf_draft_trip'); } catch {}
+    await _saveTripInner();
+  } finally {
+    btnSaveTrip.disabled = false;
+  }
+}
+
+async function _saveTripInner() {
+  const body = _tripBody(_trackPoints, saveTripNameEl.value.trim() || 'Untitled trip', saveTripNoteEl.value.trim());
+
+  let res = null;
+  if (navigator.onLine) {
+    try { res = await _postTrip(body); } catch { /* network failure — queue below */ }
+  }
+  if (res && res.ok) {
+    _finishSavedRecording();
     showToast('Trip saved');
     loadMyTrips();
+    flushUploadQueue();
+    return;
+  }
+  if (res && res.status < 500) {
+    // The server rejected it (e.g. expired login) — retrying won't help.
+    showToast(res.status === 401 ? 'Login expired — log in again to save' : 'Could not save trip — try again');
+    return;
+  }
+  // Offline, unreachable or a server error: keep it on the device.
+  try {
+    await _idbTx('uploadQueue', 'readwrite', tx => {
+      tx.objectStore('uploadQueue').put({ localId: Date.now().toString(36), queuedAt: Date.now(), body });
+    });
   } catch {
     showToast('Could not save trip — try again');
+    return;
   }
+  _finishSavedRecording();
+  showToast('Saved on this device — uploads when you\'re back online');
+  loadMyTrips();
+}
+
+function _getUploadQueue() {
+  return _idbTx('uploadQueue', 'readonly', tx => tx.objectStore('uploadQueue').getAll()).catch(() => []);
+}
+
+function _deleteQueuedTrip(localId) {
+  return _idbTx('uploadQueue', 'readwrite', tx => { tx.objectStore('uploadQueue').delete(localId); }).catch(() => {});
+}
+
+let _flushingQueue = false;
+
+/** Uploads trips saved while offline. Stops at the first failure and keeps
+ *  the rest for the next attempt (back online, next app start, next save). */
+async function flushUploadQueue() {
+  if (_flushingQueue || !authState.user || !navigator.onLine) return;
+  _flushingQueue = true;
+  let uploaded = 0;
+  try {
+    const queue = await _getUploadQueue();
+    for (const item of queue) {
+      let res;
+      try { res = await _postTrip(item.body); } catch { break; }
+      if (res.status === 401) { showToast('Log in again to upload trips saved offline'); break; }
+      if (!res.ok) break;
+      await _deleteQueuedTrip(item.localId);
+      uploaded++;
+    }
+  } finally {
+    _flushingQueue = false;
+  }
+  if (uploaded) {
+    showToast(uploaded === 1 ? 'Uploaded 1 trip saved offline' : `Uploaded ${uploaded} trips saved offline`);
+    loadMyTrips();
+  }
+}
+
+window.addEventListener('online', flushUploadQueue);
+
+function _renderQueuedTripItem(item) {
+  const points = item.body.path.geometry.coordinates.map((c, i) => ({
+    lng: c[0], lat: c[1], t: item.body.path.properties.timestamps[i],
+  }));
+  const stats = computeTripStatsClient(points);
+
+  const el = document.createElement('div');
+  el.className = 'trip-item';
+
+  const header = document.createElement('div');
+  header.className = 'trip-item-header';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'trip-item-name';
+  nameEl.textContent = item.body.name;
+  const dateEl = document.createElement('span');
+  dateEl.className = 'trip-item-date';
+  dateEl.textContent = _fmtDate(new Date(points[0].t).toISOString());
+  header.append(nameEl, dateEl);
+
+  const statsEl = document.createElement('div');
+  statsEl.className = 'trip-item-stats';
+  statsEl.textContent = `${(stats.distanceM / 1000).toFixed(2)} km · ${_fmtElapsed(stats.durationS)} · waiting to upload`;
+
+  const actions = document.createElement('div');
+  actions.className = 'trip-item-actions';
+  const btnDiscard = document.createElement('button');
+  btnDiscard.type = 'button';
+  btnDiscard.className = 'trip-action-btn danger';
+  btnDiscard.textContent = 'Discard';
+  btnDiscard.addEventListener('click', async () => {
+    await _deleteQueuedTrip(item.localId);
+    loadMyTrips();
+  });
+  actions.append(btnDiscard);
+
+  el.append(header, statsEl, actions);
+  return el;
 }
 
 async function loadMyTrips() {
   if (!authState.user) return;
+  const queued = await _getUploadQueue();
+  let trips = [];
+  let failed = false;
   try {
     const res = await apiFetch('/trips');
     if (!res.ok) throw new Error('list_failed');
-    const { trips } = await res.json();
-    tripListEl.innerHTML = '';
-    tripListEmptyEl.classList.toggle('hidden', trips.length > 0);
-    trips.forEach(trip => tripListEl.appendChild(renderTripListItem(trip)));
+    ({ trips } = await res.json());
   } catch {
-    showToast('Could not load trips');
+    failed = true;
   }
+  tripListEl.innerHTML = '';
+  queued.forEach(item => tripListEl.appendChild(_renderQueuedTripItem(item)));
+  trips.forEach(trip => tripListEl.appendChild(renderTripListItem(trip)));
+  tripListEmptyEl.classList.toggle('hidden', failed || trips.length + queued.length > 0);
+  if (failed && navigator.onLine) showToast('Could not load trips');
 }
 
 function renderTripListItem(trip) {
@@ -2792,6 +3077,7 @@ function init() {
   if (sharedTripToken) loadSharedTrip(sharedTripToken);
 
   initOffline();
+  _restorePersistedRecording();
 }
 
 const map3dEl = document.getElementById('map-3d');
