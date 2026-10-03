@@ -154,30 +154,37 @@ const layers = {
   'mml-bg':   null,
   'no-topo':  L.tileLayer(NO_TOPO_URL, {
     maxZoom: 17,
+    crossOrigin: true,
     attribution: NO_TOPO_ATTRIB,
   }),
   'no-gray':  L.tileLayer(NO_GRAY_URL, {
     maxZoom: 19,
+    crossOrigin: true,
     attribution: NO_GRAY_ATTRIB,
   }),
   'kv-topo':  L.tileLayer(KV_TOPO_URL, {
     maxZoom: 18,
+    crossOrigin: true,
     attribution: KARTVERKET_ATTRIB,
   }),
   'kv-gray':  L.tileLayer(KV_GRAY_URL, {
     maxZoom: 18,
+    crossOrigin: true,
     attribution: KARTVERKET_ATTRIB,
   }),
   'gsi-std':  L.tileLayer(GSI_STD_URL, {
     maxZoom: 18,
+    crossOrigin: true,
     attribution: GSI_ATTRIB,
   }),
   'gsi-pale': L.tileLayer(GSI_PALE_URL, {
     maxZoom: 18,
+    crossOrigin: true,
     attribution: GSI_ATTRIB,
   }),
   osm: L.tileLayer(OSM_URL, {
     maxZoom: 19,
+    crossOrigin: true,
     attribution: OSM_ATTRIB,
   }),
 };
@@ -185,6 +192,7 @@ const layers = {
 function buildMmlLayer(layerName) {
   return L.tileLayer(mmlUrl(layerName), {
     maxZoom: 16,
+    crossOrigin: true,
     attribution: '&copy; <a href="https://www.maanmittauslaitos.fi">Maanmittauslaitos</a>',
     errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==',
   });
@@ -2456,6 +2464,310 @@ btnShareClose.addEventListener('click', () => {
   clearReplay();
 });
 
+/* ─── Offline maps ───────────────────────────────────────────────────── */
+// sw.js serves tiles cache-first from every cache, so an offline area is
+// just a Cache Storage cache ("powsurf-pack-<id>") pre-filled with the exact
+// tile URLs the 2D/3D maps request. Area metadata lives in localStorage.
+
+const OFFLINE_PACK_PREFIX = 'powsurf-pack-';
+const OFFLINE_META_KEY    = 'powsurf_offline_packs';
+const OFFLINE_MIN_ZOOM    = 8;
+const OFFLINE_MAX_TILES   = 8000;
+const OFFLINE_CONCURRENCY = 6;
+const TERRARIUM_MAX_ZOOM  = 15;
+const TERRARIUM_EST_KB    = 80;
+
+// Only providers whose terms allow bulk download. OSM, OpenTopoMap and
+// CARTO tiles still get the SW's recently-viewed cache, just not packs.
+const OFFLINE_BASEMAPS = {
+  'mml-topo': { url: () => mmlUrl('maastokartta'), maxZoom: 16, estKb: 25 },
+  'mml-bg':   { url: () => mmlUrl('taustakartta'), maxZoom: 16, estKb: 20 },
+  'kv-topo':  { url: () => KV_TOPO_URL,  maxZoom: 18, estKb: 60 },
+  'kv-gray':  { url: () => KV_GRAY_URL,  maxZoom: 18, estKb: 50 },
+  'gsi-std':  { url: () => GSI_STD_URL,  maxZoom: 18, estKb: 50 },
+  'gsi-pale': { url: () => GSI_PALE_URL, maxZoom: 18, estKb: 40 },
+};
+
+const offlineSupported = 'serviceWorker' in navigator && 'caches' in window && location.protocol !== 'file:';
+
+const offlineControlsEl    = document.getElementById('offline-controls');
+const offlineUnsupportedEl = document.getElementById('offline-unsupported');
+const offlineUsageEl       = document.getElementById('offline-usage');
+const offlineDetailEl      = document.getElementById('offline-detail');
+const offlineEstimateEl    = document.getElementById('offline-estimate');
+const btnOfflineDownload   = document.getElementById('btn-offline-download');
+const offlineProgressEl    = document.getElementById('offline-progress');
+const offlineProgressBar   = document.getElementById('offline-progress-bar');
+const offlineProgressText  = document.getElementById('offline-progress-text');
+const btnOfflineCancel     = document.getElementById('btn-offline-cancel');
+const offlineListEl        = document.getElementById('offline-list');
+
+let _offlineAbort = null;  // AbortController of the running download
+
+function _tileX(lng, z) {
+  return Math.floor((lng + 180) / 360 * 2 ** z);
+}
+
+function _tileY(lat, z) {
+  const r = lat * Math.PI / 180;
+  return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 2 ** z);
+}
+
+function _tileUrl(template, z, x, y) {
+  return template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+}
+
+/** Bounds of what's actually on screen. The 2D map div is 150% of #app and
+ *  CSS-rotated by state.bearing, so map.getBounds() would cover ~2.25× the
+ *  visible area — instead un-rotate #app's corners into div coordinates. */
+function _visibleBounds() {
+  if (map3d && !map3dEl.classList.contains('hidden')) {
+    const b = map3d.getBounds();
+    return L.latLngBounds([b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]);
+  }
+  const size = map.getSize();
+  const hw = size.x / 1.5 / 2;
+  const hh = size.y / 1.5 / 2;
+  const a = state.bearing * Math.PI / 180;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  const corners = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([sx, sy]) =>
+    map.containerPointToLatLng([size.x / 2 + sx * cos + sy * sin, size.y / 2 - sx * sin + sy * cos]));
+  return L.latLngBounds(corners);
+}
+
+/** Tile URLs (basemap + Terrarium elevation) covering `bounds` up to `zmax`. */
+function _offlinePlan(bounds, basemapKey, zmax) {
+  const src = OFFLINE_BASEMAPS[basemapKey];
+  const baseTemplate = src.url();
+  const urls = [];
+  let estKb = 0;
+  const addRange = (z, template, margin) => {
+    const n = 2 ** z;
+    const x0 = Math.max(0, _tileX(bounds.getWest(), z));
+    const x1 = Math.min(n - 1, _tileX(bounds.getEast(), z) + margin);
+    const y0 = Math.max(0, _tileY(bounds.getNorth(), z));
+    const y1 = Math.min(n - 1, _tileY(bounds.getSouth(), z) + margin);
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) urls.push(_tileUrl(template, z, x, y));
+    return (x1 - x0 + 1) * (y1 - y0 + 1);
+  };
+  for (let z = OFFLINE_MIN_ZOOM; z <= zmax; z++) {
+    if (z <= src.maxZoom) estKb += addRange(z, baseTemplate, 0) * src.estKb;
+    // Slope/shadow tiles also read the right and bottom neighbour tiles.
+    if (z <= TERRARIUM_MAX_ZOOM) estKb += addRange(z, TERRARIUM_URL, 1) * TERRARIUM_EST_KB;
+    if (urls.length > OFFLINE_MAX_TILES) break;
+  }
+  return { urls, estMb: estKb / 1024 };
+}
+
+function _fmtMb(mb) {
+  if (mb < 1) return '<1 MB';
+  return mb >= 1000 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+}
+
+function updateOfflineEstimate() {
+  if (!offlineSupported || _offlineAbort) return;
+  if (!OFFLINE_BASEMAPS[state.basemap]) {
+    offlineEstimateEl.textContent = 'Switch to an NLS, Kartverket or GSI base map to download — ' +
+      'OpenStreetMap-based maps don\'t allow bulk downloads.';
+    btnOfflineDownload.disabled = true;
+    return;
+  }
+  const plan = _offlinePlan(_visibleBounds(), state.basemap, +offlineDetailEl.value);
+  if (plan.urls.length > OFFLINE_MAX_TILES) {
+    offlineEstimateEl.textContent = 'Area too large — zoom in or pick less detail.';
+    btnOfflineDownload.disabled = true;
+    return;
+  }
+  offlineEstimateEl.textContent = `${plan.urls.length.toLocaleString()} tiles · about ${_fmtMb(plan.estMb)}`;
+  btnOfflineDownload.disabled = false;
+}
+
+function _loadOfflinePacks() {
+  try { return JSON.parse(localStorage.getItem(OFFLINE_META_KEY)) || []; } catch { return []; }
+}
+
+function _saveOfflinePacks(packs) {
+  try { localStorage.setItem(OFFLINE_META_KEY, JSON.stringify(packs)); } catch {}
+}
+
+async function _fetchTile(url, signal) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      // 'no-store' makes sw.js step aside, so the tile isn't also written
+      // into its recently-viewed cache.
+      const res = await fetch(url, { mode: 'cors', cache: 'no-store', signal });
+      if (res.ok) return res;
+    } catch (err) {
+      if (signal.aborted) throw err;
+    }
+  }
+  return null;
+}
+
+async function downloadOfflineArea() {
+  if (_offlineAbort || !OFFLINE_BASEMAPS[state.basemap]) return;
+  const bounds = _visibleBounds();
+  const zmax = +offlineDetailEl.value;
+  const { urls } = _offlinePlan(bounds, state.basemap, zmax);
+  if (!urls.length || urls.length > OFFLINE_MAX_TILES) return;
+
+  // Ask the browser not to evict saved areas under storage pressure.
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+
+  const id = Date.now().toString(36);
+  const cacheName = OFFLINE_PACK_PREFIX + id;
+  const cache = await caches.open(cacheName);
+  _offlineAbort = new AbortController();
+  const { signal } = _offlineAbort;
+
+  btnOfflineDownload.disabled = true;
+  offlineProgressEl.classList.remove('hidden');
+  let next = 0, done = 0, failed = 0, bytes = 0, quotaHit = false;
+  const showProgress = () => {
+    offlineProgressBar.style.width = `${(done / urls.length) * 100}%`;
+    offlineProgressText.textContent = `${done.toLocaleString()} / ${urls.length.toLocaleString()} tiles · ${_fmtMb(bytes / 1048576)}`;
+  };
+  showProgress();
+
+  const worker = async () => {
+    while (next < urls.length && !signal.aborted) {
+      const url = urls[next++];
+      try {
+        // Reuse a tile already in the recently-viewed cache when possible.
+        const res = (await caches.match(url, { ignoreVary: true })) || (await _fetchTile(url, signal));
+        if (res) {
+          bytes += (await res.clone().blob()).size;
+          await cache.put(url, res);
+        } else {
+          failed++;
+        }
+      } catch (err) {
+        if (signal.aborted) return;
+        if (err && err.name === 'QuotaExceededError') { quotaHit = true; _offlineAbort.abort(); return; }
+        failed++;
+      }
+      done++;
+      showProgress();
+    }
+  };
+  await Promise.all(Array.from({ length: OFFLINE_CONCURRENCY }, worker));
+
+  _offlineAbort = null;
+  offlineProgressEl.classList.add('hidden');
+
+  if (signal.aborted) {
+    await caches.delete(cacheName);
+    showToast(quotaHit ? 'Not enough storage for this area' : 'Download cancelled');
+  } else {
+    const label = basemapSelect.querySelector(`option[value="${state.basemap}"]`).textContent;
+    const packs = _loadOfflinePacks();
+    packs.push({
+      id, basemap: state.basemap, name: label, zmax,
+      bounds: [bounds.getSouth(), bounds.getWest(), bounds.getNorth(), bounds.getEast()],
+      tiles: done - failed, bytes, createdAt: new Date().toISOString(),
+    });
+    _saveOfflinePacks(packs);
+    showToast(failed > urls.length * 0.05
+      ? `Saved, but ${failed} tiles failed — the area may have gaps`
+      : 'Area saved for offline use');
+  }
+  renderOfflinePacks();
+  updateOfflineEstimate();
+}
+
+async function deleteOfflinePack(id) {
+  await caches.delete(OFFLINE_PACK_PREFIX + id);
+  _saveOfflinePacks(_loadOfflinePacks().filter(p => p.id !== id));
+  renderOfflinePacks();
+}
+
+function showOfflinePack(pack) {
+  if (state.basemap !== pack.basemap) {
+    basemapSelect.value = pack.basemap;
+    setBasemap(pack.basemap);
+  }
+  const [s, w, n, e] = pack.bounds;
+  if (map3d && !map3dEl.classList.contains('hidden')) {
+    map3d.fitBounds([[w, s], [e, n]], { padding: 20 });
+  } else {
+    map.fitBounds([[s, w], [n, e]]);
+  }
+}
+
+async function renderOfflinePacks() {
+  if (!offlineSupported) return;
+  // Drop metadata whose cache the browser has evicted.
+  const packs = [];
+  for (const p of _loadOfflinePacks()) {
+    if (await caches.has(OFFLINE_PACK_PREFIX + p.id)) packs.push(p);
+  }
+  _saveOfflinePacks(packs);
+
+  offlineListEl.innerHTML = '';
+  packs.forEach(pack => {
+    const el = document.createElement('div');
+    el.className = 'trip-item';
+
+    const header = document.createElement('div');
+    header.className = 'trip-item-header';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'trip-item-name';
+    nameEl.textContent = pack.name;
+    const dateEl = document.createElement('span');
+    dateEl.className = 'trip-item-date';
+    dateEl.textContent = _fmtDate(pack.createdAt);
+    header.append(nameEl, dateEl);
+
+    const stats = document.createElement('div');
+    stats.className = 'trip-item-stats';
+    stats.textContent = `zoom ${pack.zmax} · ${pack.tiles.toLocaleString()} tiles · ${_fmtMb(pack.bytes / 1048576)}`;
+
+    const actions = document.createElement('div');
+    actions.className = 'trip-item-actions';
+    const btnShow = document.createElement('button');
+    btnShow.type = 'button';
+    btnShow.className = 'trip-action-btn';
+    btnShow.textContent = 'Show';
+    btnShow.addEventListener('click', () => showOfflinePack(pack));
+    const btnDelete = document.createElement('button');
+    btnDelete.type = 'button';
+    btnDelete.className = 'trip-action-btn danger';
+    btnDelete.textContent = 'Delete';
+    btnDelete.addEventListener('click', () => deleteOfflinePack(pack.id));
+    actions.append(btnShow, btnDelete);
+
+    el.append(header, stats, actions);
+    offlineListEl.appendChild(el);
+  });
+
+  if (navigator.storage && navigator.storage.estimate) {
+    const { usage } = await navigator.storage.estimate();
+    offlineUsageEl.textContent = usage ? `${_fmtMb(usage / 1048576)} used` : '';
+  }
+}
+
+function initOffline() {
+  if (!offlineSupported) {
+    offlineControlsEl.classList.add('hidden');
+    offlineUnsupportedEl.classList.remove('hidden');
+    return;
+  }
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+
+  btnOfflineDownload.addEventListener('click', downloadOfflineArea);
+  btnOfflineCancel.addEventListener('click', () => _offlineAbort && _offlineAbort.abort());
+  offlineDetailEl.addEventListener('change', updateOfflineEstimate);
+  basemapSelect.addEventListener('change', updateOfflineEstimate);
+  map.on('moveend', updateOfflineEstimate);
+
+  window.addEventListener('offline', () => showToast('Offline — showing saved maps'));
+  window.addEventListener('online',  () => showToast('Back online'));
+
+  updateOfflineEstimate();
+  renderOfflinePacks();
+}
+
 /* ─── Initialise ─────────────────────────────────────────────────────── */
 
 function init() {
@@ -2478,6 +2790,8 @@ function init() {
 
   const sharedTripToken = new URLSearchParams(location.search).get('trip');
   if (sharedTripToken) loadSharedTrip(sharedTripToken);
+
+  initOffline();
 }
 
 const map3dEl = document.getElementById('map-3d');
@@ -2705,6 +3019,7 @@ function init3D() {
     if (_recordingOn) _update3DTrackLayer();
     if (_replayPoints) _update3DReplayLayer();
     map3d.on('zoomend', updateZoomHint);
+    map3d.on('moveend', updateOfflineEstimate);
     // Keep the direction arrow aligned when user two-finger rotates the 3D map
     map3d.on('rotate', () => {
       if (_3dArrowEl && _deviceHead !== null) {

@@ -11,6 +11,8 @@
   <link rel="stylesheet" href="leaflet.css">
   <link rel="stylesheet" href="maplibre-gl.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-192.png">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 18L12 4L21 18' stroke='%234fc3f7' stroke-width='2' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -335,6 +337,39 @@
             <option value="gsi-pale">Japan – GSI Pale</option>
             <option value="osm">OpenStreetMap</option>
           </select>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Offline maps -->
+        <div class="control-section" id="offline-section">
+          <div class="section-header">
+            <span class="section-title">Offline maps</span>
+            <span id="offline-usage" class="label-sub"></span>
+          </div>
+          <div id="offline-unsupported" class="label-sub hidden">Offline maps need a browser with service worker support, served over https.</div>
+          <div id="offline-controls">
+            <div class="control-label">
+              <span class="label-sub" id="offline-hint">Saves the current map view with elevation data, so the map, slope, shadow and 3D views work without signal.</span>
+            </div>
+            <div class="offline-row">
+              <select id="offline-detail" aria-label="Offline detail level">
+                <option value="14">Overview (zoom 14)</option>
+                <option value="15" selected>Detailed (zoom 15)</option>
+                <option value="16">Most detail (zoom 16)</option>
+              </select>
+              <button id="btn-offline-download" class="btn-primary" type="button">Download</button>
+            </div>
+            <div id="offline-estimate" class="label-sub"></div>
+            <div id="offline-progress" class="hidden">
+              <div class="offline-progress-track"><div id="offline-progress-bar" class="offline-progress-bar"></div></div>
+              <div class="offline-progress-row">
+                <span id="offline-progress-text" class="label-sub"></span>
+                <button id="btn-offline-cancel" class="text-btn" type="button">Cancel</button>
+              </div>
+            </div>
+            <div id="offline-list"></div>
+          </div>
         </div>
 
         <div class="divider"></div>
