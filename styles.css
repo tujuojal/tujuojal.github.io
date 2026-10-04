@@ -164,6 +164,128 @@ html, body {
 .icon-btn svg {
   width: 20px;
   height: 20px;
+  flex-shrink: 0;
+}
+
+/* ─── Top bar overflow menu ──────────────────────────────────────────── */
+/* Phones: Locate, Record and ⋯ stay in the bar; the rest drop down as a
+   labelled list under ⋯. The compass only shows while the map is rotated. */
+#btn-compass:not(.active) {
+  display: none;
+}
+
+#btn-menu {
+  position: relative;
+}
+
+#btn-menu[aria-expanded="true"] {
+  background: rgba(79,195,247,0.25);
+  border-color: var(--accent);
+}
+
+/* Dot on ⋯ when something hidden inside the menu is switched on */
+#btn-menu.has-active::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-0);
+}
+
+#topbar-menu {
+  position: absolute;
+  top: calc(var(--topbar-h) - 4px);
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(13,27,42,0.95);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-6px);
+  transition: opacity 0.15s, transform 0.15s, visibility 0s 0.15s;
+}
+
+#topbar-menu.open {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+#topbar-menu .icon-btn {
+  width: 100%;
+  height: 44px;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border-color: transparent;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  font-family: inherit;
+  font-size: 15px;
+  text-align: left;
+}
+
+#topbar-menu .icon-btn.active {
+  background: rgba(79,195,247,0.15);
+}
+
+#topbar-menu .icon-btn:active {
+  transform: none;
+  background: rgba(79,195,247,0.2);
+}
+
+/* Wide screens: no menu — every button sits inline in the bar as before. */
+@media (min-width: 600px) {
+  #btn-menu {
+    display: none;
+  }
+
+  #btn-compass:not(.active) {
+    display: flex;
+  }
+
+  #topbar-menu {
+    display: contents;
+    visibility: visible; /* children would otherwise inherit the hidden state */
+  }
+
+  #topbar-menu .icon-btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    gap: 0;
+    justify-content: center;
+    border-radius: 50%;
+    border-color: var(--border);
+    background: rgba(13,27,42,0.75);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+
+  #topbar-menu .icon-btn.active {
+    background: rgba(79,195,247,0.25);
+    border-color: var(--accent);
+  }
+
+  #topbar-menu .btn-label {
+    display: none;
+  }
 }
 
 /* ─── Zoom hint ──────────────────────────────────────────────────────── */

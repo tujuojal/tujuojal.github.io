@@ -33,18 +33,6 @@
         <span class="logo-text">PowSurf</span>
       </div>
       <div id="topbar-actions">
-        <button id="btn-locate" class="icon-btn" title="My location" aria-label="Go to my location" aria-pressed="false">
-          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
-            <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-        </button>
-        <button id="btn-shadow" class="icon-btn" title="Sun shadow overlay" aria-label="Toggle sun shadow overlay" aria-pressed="false">
-          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2"/>
-            <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-        </button>
         <button id="btn-compass" class="icon-btn" title="Reset north (tap) · Two-finger rotate on map" aria-label="Reset map to north">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.2s ease">
             <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.2" opacity="0.4"/>
@@ -55,11 +43,10 @@
             <circle cx="12" cy="12" r="1.5" fill="currentColor" opacity="0.7"/>
           </svg>
         </button>
-        <button id="btn-3d" class="icon-btn" title="3D view" aria-label="Toggle 3D terrain view">
+        <button id="btn-locate" class="icon-btn" title="My location" aria-label="Go to my location" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-            <path d="M2 12l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-            <path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
         </button>
         <button id="btn-record" class="icon-btn" title="Record trip" aria-label="Start recording a GPS trip" aria-pressed="false">
@@ -68,17 +55,44 @@
             <circle cx="12" cy="12" r="4" fill="currentColor"/>
           </svg>
         </button>
-        <button id="btn-account" class="icon-btn" title="Account &amp; trips" aria-label="Open account and trips panel">
+        <!-- Overflow menu: a drop-down list on phones, inline icons on wide screens -->
+        <button id="btn-menu" class="icon-btn" title="More" aria-label="More options" aria-haspopup="true" aria-expanded="false" aria-controls="topbar-menu">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="2"/>
-            <path d="M4.5 20c1.5-4 5-6 7.5-6s6 2 7.5 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="5" cy="12" r="1.8" fill="currentColor"/>
+            <circle cx="12" cy="12" r="1.8" fill="currentColor"/>
+            <circle cx="19" cy="12" r="1.8" fill="currentColor"/>
           </svg>
         </button>
-        <button id="btn-panel" class="icon-btn" title="Settings" aria-label="Open settings panel">
-          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-        </button>
+        <div id="topbar-menu">
+          <button id="btn-shadow" class="icon-btn" title="Sun shadow overlay" aria-label="Toggle sun shadow overlay" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2"/>
+              <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            <span class="btn-label">Sun shadow</span>
+          </button>
+          <button id="btn-3d" class="icon-btn" title="3D view" aria-label="Toggle 3D terrain view">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+              <path d="M2 12l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+              <path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            </svg>
+            <span class="btn-label">3D view</span>
+          </button>
+          <button id="btn-account" class="icon-btn" title="Account &amp; trips" aria-label="Open account and trips panel">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="2"/>
+              <path d="M4.5 20c1.5-4 5-6 7.5-6s6 2 7.5 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span class="btn-label">Account &amp; trips</span>
+          </button>
+          <button id="btn-panel" class="icon-btn" title="Settings" aria-label="Open settings panel">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span class="btn-label">Settings</span>
+          </button>
+        </div>
       </div>
     </header>
 

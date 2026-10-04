@@ -883,6 +883,30 @@ map.on('zoomend', updateZoomHint);
 
 /* ─── UI bindings ────────────────────────────────────────────────────── */
 
+// Top bar ⋯ menu (phones only — on wide screens CSS shows its buttons inline
+// and hides ⋯). The buttons inside keep their own ids and handlers.
+const btnMenu    = document.getElementById('btn-menu');
+const topbarMenu = document.getElementById('topbar-menu');
+
+function setMenuOpen(open) {
+  topbarMenu.classList.toggle('open', open);
+  btnMenu.setAttribute('aria-expanded', String(open));
+}
+
+btnMenu.addEventListener('click', () => setMenuOpen(!topbarMenu.classList.contains('open')));
+// Picking an item closes the menu (bubbles here after the item's own handler).
+topbarMenu.addEventListener('click', e => { if (e.target.closest('button')) setMenuOpen(false); });
+document.addEventListener('click', e => {
+  if (!topbarMenu.contains(e.target) && !btnMenu.contains(e.target)) setMenuOpen(false);
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenuOpen(false); });
+
+// Dot on ⋯ while a toggle hidden in the menu (shadow, 3D) is switched on.
+function _updateMenuDot() {
+  btnMenu.classList.toggle('has-active', !!topbarMenu.querySelector('.icon-btn.active'));
+}
+new MutationObserver(_updateMenuDot).observe(topbarMenu, { subtree: true, attributeFilter: ['class'] });
+
 // Panel toggle
 const panel    = document.getElementById('panel');
 const btnPanel = document.getElementById('btn-panel');
