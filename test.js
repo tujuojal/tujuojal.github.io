@@ -190,6 +190,31 @@ ok('app.js script tag present',   indexSrc.includes('src="app.js"'));
 ok('leaflet.js script tag present', indexSrc.includes('src="leaflet.js"'));
 ok('No SVG filter block (removed)', !indexSrc.includes('id="pows-svg-filters"'));
 
+/* ─── 9b. Place search ───────────────────────────────────────────────── */
+console.log('\n── 9b. Place search ──');
+
+ok('Search button present',        indexSrc.includes('id="btn-search"'));
+ok('Search bar present',           indexSrc.includes('id="search-bar"'));
+ok('Search uses Nominatim',        appSrc.includes('nominatim.openstreetmap.org/search'));
+ok('Search respects 1 req/s limit', /SEARCH_MIN_GAP_MS\s*=\s*1\d{3}/.test(appSrc));
+ok('Search pin rebuilt after every init3D()',
+   (appSrc.match(/_syncSearchPin3D\(\);/g) || []).length >= 3);
+ok('Search pin styled',            stylesSrc.includes('.search-pin'));
+
+{
+  const src = appSrc.match(/function parseLatLng\(text\) \{[\s\S]*?\n\}/);
+  ok('parseLatLng declared', !!src);
+  if (src) {
+    const parseLatLng = new Function(src[0] + '; return parseLatLng;')();
+    const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    ok('parseLatLng "68.06, 24.06"', eq(parseLatLng('68.06, 24.06'), { lat: 68.06, lng: 24.06 }));
+    ok('parseLatLng "68.06 24.06"',  eq(parseLatLng(' 68.06 24.06 '), { lat: 68.06, lng: 24.06 }));
+    ok('parseLatLng "-33.9,18.4"',   eq(parseLatLng('-33.9,18.4'), { lat: -33.9, lng: 18.4 }));
+    ok('parseLatLng rejects place names', parseLatLng('Pallas') === null);
+    ok('parseLatLng rejects out-of-range', parseLatLng('95, 10') === null);
+  }
+}
+
 /* ─── 10. CSS custom properties ──────────────────────────────────────── */
 console.log('\n── 10. CSS ──');
 

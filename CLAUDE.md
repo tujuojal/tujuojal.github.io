@@ -67,3 +67,7 @@ A Cloudflare Worker at `powsurf-heatmap.powsurf-heatmap.workers.dev` proxies two
 GPS tracking uses `watchPosition`. Direction arrows are driven by `deviceorientationabsolute` (Chrome/Android) with fallback to `deviceorientation` + `webkitCompassHeading` (iOS). The 2D arrow is an SVG `<g>` rotated in place via `setAttribute('transform', ...)` rather than calling `setIcon()`. The 3D arrow is a `maplibregl.Marker` with an inline SVG element rotated via CSS.
 
 iOS 13+ requires `DeviceOrientationEvent.requestPermission()` to be called **synchronously within the click handler** — this is why it happens before the async GPS call in the locate button handler.
+
+### Place search
+
+The 🔍 button opens `#search-bar`, which geocodes with OpenStreetMap **Nominatim** (`NOMINATIM_URL`). Nominatim's usage policy allows ≤1 request/s and forbids search-as-you-type, so queries only run on submit and are spaced by `SEARCH_MIN_GAP_MS`. Results are biased toward the current view (`viewbox`). Input like `68.06, 24.06` is parsed locally by `parseLatLng()` and never hits the network. Picking a result moves whichever map is visible and drops a pin (tap the pin to remove it); `_syncSearchPin3D()` must be called after every `init3D()` because basemap switches recreate `map3d`.

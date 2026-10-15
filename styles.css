@@ -288,6 +288,142 @@ html, body {
   }
 }
 
+/* ─── Place search ───────────────────────────────────────────────────── */
+/* Sits above the shadow/record bars (z 799) so it covers them while open. */
+#search-bar {
+  position: absolute;
+  top: var(--topbar-h);
+  left: 0;
+  right: 0;
+  z-index: 801;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 10px 12px 6px;
+  background: rgba(13,27,42,0.95);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 0 0 14px 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+
+.search-form {
+  display: flex;
+  gap: 8px;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-0);
+  font: inherit;
+  font-size: 16px; /* ≥16px stops iOS zooming in on focus */
+  color-scheme: dark;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.search-go {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: rgba(79,195,247,0.2);
+  color: var(--accent);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.search-go:active {
+  background: rgba(79,195,247,0.35);
+}
+
+.search-status {
+  padding: 10px 4px 2px;
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.search-results {
+  list-style: none;
+  max-height: min(50vh, 360px);
+  overflow-y: auto;
+  margin-top: 6px;
+}
+
+.search-results:empty {
+  margin-top: 0;
+}
+
+.search-result {
+  display: block;
+  width: 100%;
+  padding: 9px 8px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-0);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-result:hover,
+.search-result:focus-visible {
+  background: rgba(79,195,247,0.12);
+  outline: none;
+}
+
+.search-result:active {
+  background: rgba(79,195,247,0.2);
+}
+
+.search-result-name {
+  display: block;
+  font-size: 15px;
+}
+
+.search-result-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-attrib {
+  padding: 6px 4px 0;
+  font-size: 10px;
+  color: var(--text-2);
+  text-align: right;
+}
+
+.search-attrib a {
+  color: inherit;
+}
+
+/* Dropped pin for the picked search result (2D divIcon and 3D marker) */
+.search-pin {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 4px var(--accent-glow), 0 2px 6px rgba(0,0,0,0.5);
+}
+
 /* ─── Zoom hint ──────────────────────────────────────────────────────── */
 #zoom-hint {
   position: absolute;

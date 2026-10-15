@@ -239,6 +239,7 @@ function setBasemap(key) {
         if (_trackingOn && _lastPos) _update3DLocMarker();
         if (_recordingOn) _update3DTrackLayer();
         if (_replayPoints) _update3DReplayLayer();
+        _syncSearchPin3D();
       });
     }
   }
@@ -906,6 +907,244 @@ function _updateMenuDot() {
   btnMenu.classList.toggle('has-active', !!topbarMenu.querySelector('.icon-btn.active'));
 }
 new MutationObserver(_updateMenuDot).observe(topbarMenu, { subtree: true, attributeFilter: ['class'] });
+
+/* ─── Place search ───────────────────────────────────────────────────── */
+// Geocoding via OpenStreetMap Nominatim. Its usage policy allows at most one
+// request per second and forbids search-as-you-type, so we only query on
+// submit. "lat, lng" input is parsed locally and never hits the network.
+
+const NOMINATIM_URL       = 'https://nominatim.openstreetmap.org/search';
+const SEARCH_MIN_GAP_MS   = 1100;
+const SEARCH_MAX_ZOOM     = 15;
+
+const btnSearch     = document.getElementById('btn-search');
+const searchBar     = document.getElementById('search-bar');
+const searchForm    = document.getElementById('search-form');
+const searchInput   = document.getElementById('search-input');
+const searchStatus  = document.getElementById('search-status');
+const searchResults = document.getElementById('search-results');
+
+let _searchAbort   = null;
+let _searchLastAt  = 0;
+let _searchHit     = null;   // { lat, lng, name } of the picked result
+let _searchPin2D   = null;
+let _searchPin3D   = null;
+
+function setSearchOpen(open) {
+  searchBar.classList.toggle('hidden', !open);
+  btnSearch.classList.toggle('active', open);
+  btnSearch.setAttribute('aria-expanded', String(open));
+  if (open) {
+    setMenuOpen(false);
+    searchInput.focus();
+    searchInput.select();
+  } else {
+    searchInput.blur();
+  }
+}
+
+btnSearch.addEventListener('click', () => setSearchOpen(searchBar.classList.contains('hidden')));
+document.addEventListener('click', e => {
+  if (!searchBar.classList.contains('hidden') &&
+      !searchBar.contains(e.target) && !btnSearch.contains(e.target)) {
+    setSearchOpen(false);
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !searchBar.classList.contains('hidden')) setSearchOpen(false);
+});
+
+function _setSearchStatus(msg) {
+  searchStatus.textContent = msg || '';
+  searchStatus.classList.toggle('hidden', !msg);
+}
+
+/** "68.06, 24.06" / "68.06 24.06" / "-33.9,18.4" → { lat, lng }, else null. */
+function parseLatLng(text) {
+  const m = text.trim().match(/^(-?\d{1,2}(?:\.\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:\.\d+)?)$/);
+  if (!m) return null;
+  const lat = parseFloat(m[1]);
+  const lng = parseFloat(m[2]);
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return { lat, lng };
+}
+
+/** Current view as a Nominatim viewbox (lng1,lat1,lng2,lat2) to bias results nearby. */
+function _searchViewbox() {
+  const in3D = map3d && !map3dEl.classList.contains('hidden');
+  if (in3D) {
+    const b = map3d.getBounds();
+    return [b.getWest(), b.getNorth(), b.getEast(), b.getSouth()];
+  }
+  const b = map.getBounds();
+  return [b.getWest(), b.getNorth(), b.getEast(), b.getSouth()];
+}
+
+async function runSearch(query) {
+  query = query.trim();
+  if (!query) return;
+
+  const coords = parseLatLng(query);
+  if (coords) {
+    searchResults.replaceChildren();
+    _setSearchStatus('');
+    goToSearchResult({ ...coords, name: `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` });
+    return;
+  }
+
+  if (!navigator.onLine) {
+    _setSearchStatus('Search needs an internet connection.');
+    return;
+  }
+
+  if (_searchAbort) _searchAbort.abort();
+  const ctrl = new AbortController();
+  _searchAbort = ctrl;
+
+  const wait = _searchLastAt + SEARCH_MIN_GAP_MS - Date.now();
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  if (ctrl.signal.aborted) return;
+  _searchLastAt = Date.now();
+
+  const params = new URLSearchParams({
+    q: query,
+    format: 'jsonv2',
+    limit: '8',
+    viewbox: _searchViewbox().map(v => v.toFixed(4)).join(','),
+    'accept-language': navigator.language || 'en',
+  });
+
+  _setSearchStatus('Searching…');
+  searchResults.replaceChildren();
+
+  let results;
+  try {
+    const res = await fetch(`${NOMINATIM_URL}?${params}`, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    results = await res.json();
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    _setSearchStatus('Search failed — try again in a moment.');
+    return;
+  } finally {
+    if (_searchAbort === ctrl) _searchAbort = null;
+  }
+
+  if (!results.length) {
+    _setSearchStatus(`No places found for “${query}”.`);
+    return;
+  }
+  _setSearchStatus('');
+  renderSearchResults(results);
+}
+
+function renderSearchResults(results) {
+  const items = results.map(r => {
+    const name = r.name || r.display_name.split(',')[0];
+    const kind = (r.addresstype || r.type || '').replace(/_/g, ' ');
+    const rest = r.display_name.split(',').slice(1).join(',').trim();
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'search-result';
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'search-result-name';
+    nameEl.textContent = name;
+
+    const subEl = document.createElement('span');
+    subEl.className = 'search-result-sub';
+    subEl.textContent = [kind && kind[0].toUpperCase() + kind.slice(1), rest].filter(Boolean).join(' · ');
+
+    btn.append(nameEl, subEl);
+    btn.addEventListener('click', () => {
+      // boundingbox is [south, north, west, east] as strings
+      const bb = (r.boundingbox || []).map(Number);
+      goToSearchResult({
+        lat: Number(r.lat),
+        lng: Number(r.lon),
+        name,
+        bounds: bb.length === 4 && bb.every(isFinite) ? bb : null,
+      });
+    });
+
+    const li = document.createElement('li');
+    li.appendChild(btn);
+    return li;
+  });
+  searchResults.replaceChildren(...items);
+}
+
+/** Fly to a picked place (in whichever view is showing) and drop a pin there. */
+function goToSearchResult(hit) {
+  _searchHit = { lat: hit.lat, lng: hit.lng, name: hit.name };
+  setSearchOpen(false);
+
+  // Points (peaks, huts) get a close-up; areas (towns, resorts) are fitted,
+  // never zooming in past SEARCH_MAX_ZOOM.
+  let area = null;
+  if (hit.bounds) {
+    const [s, n, w, e] = hit.bounds;
+    if (n - s > 0.01 || e - w > 0.01) area = { s, n, w, e };
+  }
+
+  if (map3d && !map3dEl.classList.contains('hidden')) {
+    // The 2D map syncs from 3D when the user switches back.
+    if (area) {
+      map3d.fitBounds([[area.w, area.s], [area.e, area.n]],
+                      { padding: 40, maxZoom: SEARCH_MAX_ZOOM, essential: true });
+    } else {
+      map3d.flyTo({ center: [hit.lng, hit.lat], zoom: 14, essential: true });
+    }
+  } else {
+    // The 2D map div is 150% of the viewport, so step back one level from
+    // Leaflet's fit to keep the whole area on-screen.
+    const zoom = area
+      ? map.getBoundsZoom(L.latLngBounds([area.s, area.w], [area.n, area.e])) - 1
+      : 14;
+    map.setView([hit.lat, hit.lng], Math.max(4, Math.min(SEARCH_MAX_ZOOM, zoom)));
+  }
+
+  _syncSearchPin2D();
+  _syncSearchPin3D();
+}
+
+function _syncSearchPin2D() {
+  if (_searchPin2D) { map.removeLayer(_searchPin2D); _searchPin2D = null; }
+  if (!_searchHit) return;
+  _searchPin2D = L.marker([_searchHit.lat, _searchHit.lng], {
+    icon: L.divIcon({ className: '', html: '<div class="search-pin"></div>', iconSize: [18, 18] }),
+    title: _searchHit.name,
+    keyboard: false,
+  }).addTo(map);
+  _searchPin2D.on('click', clearSearchPin);
+}
+
+// The 3D map is recreated on basemap switches, so the pin is rebuilt rather
+// than reused; called after every init3D().
+function _syncSearchPin3D() {
+  if (_searchPin3D) { _searchPin3D.remove(); _searchPin3D = null; }
+  if (!_searchHit || !map3d) return;
+  const el = document.createElement('div');
+  el.className = 'search-pin';
+  el.title = _searchHit.name;
+  el.addEventListener('click', e => { e.stopPropagation(); clearSearchPin(); });
+  _searchPin3D = new maplibregl.Marker({ element: el })
+    .setLngLat([_searchHit.lng, _searchHit.lat])
+    .addTo(map3d);
+}
+
+/** Tapping the pin removes it. */
+function clearSearchPin() {
+  _searchHit = null;
+  _syncSearchPin2D();
+  _syncSearchPin3D();
+}
+
+searchForm.addEventListener('submit', e => {
+  e.preventDefault();
+  runSearch(searchInput.value);
+});
 
 // Panel toggle
 const panel    = document.getElementById('panel');
@@ -3369,6 +3608,7 @@ btn3d.addEventListener('click', () => {
       if (_trackingOn && _lastPos) _update3DLocMarker();
       if (_recordingOn) _update3DTrackLayer();
       if (_replayPoints) _update3DReplayLayer();
+      _syncSearchPin3D();
     });
   } else {
     // Switch 3D → 2D; sync position back to Leaflet

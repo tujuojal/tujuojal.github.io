@@ -43,6 +43,12 @@
             <circle cx="12" cy="12" r="1.5" fill="currentColor" opacity="0.7"/>
           </svg>
         </button>
+        <button id="btn-search" class="icon-btn" title="Search places" aria-label="Search for a place" aria-expanded="false" aria-controls="search-bar">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="10.5" cy="10.5" r="6" stroke="currentColor" stroke-width="2"/>
+            <path d="M15 15l5.5 5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
         <button id="btn-locate" class="icon-btn" title="My location" aria-label="Go to my location" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
@@ -95,6 +101,18 @@
         </div>
       </div>
     </header>
+
+    <!-- Place search (slides down below topbar) -->
+    <div id="search-bar" class="hidden" role="search">
+      <form id="search-form" class="search-form" autocomplete="off">
+        <input type="search" id="search-input" class="search-input" enterkeyhint="search"
+               placeholder="Place, peak or resort · or lat, lng" aria-label="Search for a place">
+        <button type="submit" class="search-go" aria-label="Search">Search</button>
+      </form>
+      <div id="search-status" class="search-status hidden" aria-live="polite"></div>
+      <ul id="search-results" class="search-results" aria-label="Search results"></ul>
+      <div class="search-attrib">Search &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div>
+    </div>
 
     <!-- Sun shadow time bar (slides down below topbar when active) -->
     <div id="shadow-bar" class="hidden" aria-label="Sun shadow time controls">
