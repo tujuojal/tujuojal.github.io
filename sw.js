@@ -19,6 +19,7 @@ const SHELL_FILES = [
   './',
   'index.html',
   'app.js',
+  'shadow-worker.js',
   'styles.css',
   'leaflet.js',
   'leaflet.css',
@@ -42,6 +43,7 @@ const TILE_URL_RE = new RegExp([
   '^https://[a-d]\\.basemaps\\.cartocdn\\.com/',
   '^https://tile\\.openstreetmap\\.org/',
   '^https://gis3\\.nve\\.no/',
+  '^https://wcs\\.geonorge\\.no/',
 ].join('|'));
 
 self.addEventListener('install', event => {

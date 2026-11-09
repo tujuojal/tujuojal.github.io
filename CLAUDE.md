@@ -46,11 +46,24 @@ NLS WCS coordinates require WGS84 → ETRS-TM35FIN conversion — this is implem
 
 Tile data is cached in two LRU-style `Map`s: `elevCache` (Terrarium RGBA arrays) and `wcsCache` (parsed ASCII grids), each capped at 256 entries.
 
-### Shadow/hillshade
+### Sun shadows
 
-`ShadowLayer` also extends `L.GridLayer`. It fetches Terrarium tiles and calls `computeHillshade()`, which uses the sun vector from `state.shadowSun`. Sun position is computed by `sunPosition()` using simplified NOAA/Spencer equations (accuracy ~0.5° for 2000–2050).
+`sunPosition()` gives the sun's azimuth and **apparent** altitude (simplified NOAA/Spencer equations, ~0.5° for 2000–2050, plus `refraction()` — matters for low Nordic winter sun).
 
-In 3D mode, shadow is applied as MapLibre `setLight()` instead of a canvas overlay.
+`ShadowLayer` (2D only) shades real terrain shadows, not just slope orientation. For each tile `renderShadowTile()` builds two elevation mosaics in global Web-Mercator pixel space and hands them to `computeShadow()` in **`shadow-worker.js`** (worker pool; the same file is also loaded as a page script as a main-thread fallback):
+- **near** — the tile plus its sun-side neighbours at the same zoom, from `fetchBestElevGrid()`;
+- **far** — Terrarium `SHADOW_FAR_DZ` zooms coarser, sun-side half of 5×5 tiles, so ridges 10–30 km away still cast shadows when the sun is low.
+
+`computeShadow()` marks a pixel shaded if it faces away from the sun or if a ray marched toward the sun hits terrain (with earth curvature + refraction). Distant steps test block maxima from a max-pyramid so ridges can't be skipped, then `refineHit()` re-checks hits at finer levels so edges stay sharp. Rays are traced on every other pixel and in between only along shadow edges. Changing the time calls `shadowLayer.refresh()`, which re-shades tiles in place; panning only refreshes if the sun moved > 0.2°.
+
+`fetchBestElevGrid()` resamples every source onto map-tile pixels (256² Float32Array, NaN = no data), preferring, at zoom ≥ `ELEV_HIRES_MIN_ZOOM`:
+1. **Kartverket** 1 m DTM (`fetchKartverketGrid`) — Norway; WCS at `wcs.geonorge.no`, CORS-enabled, no key. Requested in EPSG:4326 with bilinear interpolation (nearest-neighbour aliases into noise), returned as uncompressed float32 GeoTIFF read by `parseFloatTiff()`. Outside Norway it returns exactly 0 / sparse tiles → treated as no data.
+2. **NLS** 2 m DTM (`fetchNlsGrid`, via `fetchWcsDem`) — Finland.
+3. **Terrarium** (`fetchTerrariumGrid`) — global; above z15 upsampled from the z15 parent (Terrarium has no z16+).
+
+Grids are cached in `gridCache`, and concurrent requests for the same grid share one fetch (`_once`).
+
+In 3D mode, shadow is applied as MapLibre `setLight()`, which in practice has no visible effect on terrain (MapLibre lights only fill-extrusions).
 
 ### Base maps
 

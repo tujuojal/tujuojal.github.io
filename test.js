@@ -215,6 +215,113 @@ ok('Search pin styled',            stylesSrc.includes('.search-pin'));
   }
 }
 
+/* ─── 9c. Terrain shadows ─────────────────────────────────────────────── */
+console.log('\n── 9c. Terrain shadows ──');
+
+ok('shadow-worker.js loaded before app.js',
+   indexSrc.indexOf('src="shadow-worker.js"') > -1 &&
+   indexSrc.indexOf('src="shadow-worker.js"') < indexSrc.indexOf('src="app.js"'));
+{
+  const swSrc = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  ok('shadow-worker.js in service worker shell', swSrc.includes("'shadow-worker.js'"));
+  ok('Kartverket WCS cached by service worker', swSrc.includes('wcs\\\\.geonorge\\\\.no'));
+}
+ok('Kartverket DTM is a shadow elevation source', appSrc.includes('wcs.geonorge.no') && appSrc.includes('fetchKartverketGrid'));
+ok('Kartverket requested with bilinear interpolation', /interpolation:\s*'bilinear'/.test(appSrc));
+
+{
+  const vm = require('vm');
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'shadow-worker.js'), 'utf8') +
+                  '\nthis.computeShadow = computeShadow;', ctx);
+  const computeShadow = ctx.computeShadow;
+
+  // Synthetic terrain on a 768×768 near grid (tile in the middle), 2 m/px.
+  const W = 768, MPP = 2;
+  const mk = fn => { const g = new Float32Array(W * W);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) g[y * W + x] = fn(x - 256, y - 256); return g; };
+  const run = (near, sun, far = null) => computeShadow({
+    near, nearW: W, nearH: W, nearOx: 0, nearOy: 0,
+    far, farW: far ? W : 0, farH: far ? W : 0, farOx: 0, farOy: 0, farScale: 16,
+    tileOx: 256, tileOy: 256, mpp: MPP, ...sun });
+  const alphaAt = (rgba, x, y) => rgba[(y * 256 + x) * 4 + 3];
+  const shaded = rgba => { let n = 0; for (let i = 3; i < rgba.length; i += 4) if (rgba[i]) n++; return n; };
+
+  ok('Flat ground in sun is unshaded', shaded(run(mk(() => 500), { azimuth: 180, altitude: 20 })) === 0);
+  ok('Night shades everything', shaded(run(mk(() => 500), { azimuth: 0, altitude: -3 })) === 65536);
+
+  // 100 m wall along tile row 200 (south side); sun from due south at 10°
+  // → shadow reaches 100 / tan(10°) ≈ 567 m ≈ 284 px north of the wall.
+  const wall = mk((x, y) => (y >= 200 && y < 204) ? 600 : 500);
+  const r = run(wall, { azimuth: 180, altitude: 10 });
+  ok('Wall casts shadow just north of it',      alphaAt(r, 128, 190) > 0);
+  ok('Ground south of the wall stays lit',      alphaAt(r, 128, 230) === 0);
+  // Same wall just south of the tile (row 300): the shadow edge should land
+  // ≈ 284 px north of it, i.e. around tile row 16.
+  const r2 = run(mk((x, y) => (y >= 300 && y < 304) ? 600 : 500), { azimuth: 180, altitude: 10 });
+  ok('Shadow length ≈ h / tan(alt) (567 m at 10°)', alphaAt(r2, 128, 20) > 0 && alphaAt(r2, 128, 12) === 0);
+  const rHigh = run(wall, { azimuth: 180, altitude: 60 });
+  ok('High sun: short shadow (≈58 m ≈ 29 px)',   alphaAt(rHigh, 128, 185) > 0 && alphaAt(rHigh, 128, 160) === 0);
+
+  // North-facing 35° slope, sun low in the south → self-shaded even with no obstacle
+  const tan35 = Math.tan(35 * Math.PI / 180);
+  const nSlope = mk((x, y) => 1000 + y * MPP * tan35);   // rises toward the south
+  ok('North face self-shades under low southern sun', shaded(run(nSlope, { azimuth: 180, altitude: 15 })) === 65536);
+  ok('South face lit under the same sun', shaded(run(mk((x, y) => 1000 - y * MPP * tan35), { azimuth: 180, altitude: 15 })) === 0);
+
+  // Far field: a 600 m ridge ~3 km south, only present in the coarse far grid
+  const flatNear = mk(() => 500);
+  const far = new Float32Array(W * W).fill(500);
+  // far px = 16 near px; tile spans far px 16–32. Ridge at far row 120 (≈ 3.1 km south).
+  for (let x = 0; x < W; x++) for (let y = 118; y < 122; y++) far[y * W + x] = 1100;
+  ok('Distant ridge (far grid) shades tile at 5° sun', shaded(run(flatNear, { azimuth: 180, altitude: 5 }, far)) === 65536);
+  ok('...but not at 25° sun',                       shaded(run(flatNear, { azimuth: 180, altitude: 25 }, far)) === 0);
+}
+
+{
+  const grab = name => {
+    const m = appSrc.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`));
+    return m && m[0];
+  };
+  const refrSrc = grab('refraction');
+  ok('refraction() declared', !!refrSrc);
+  if (refrSrc) {
+    const refraction = new Function(refrSrc + '; return refraction;')();
+    ok('Refraction ≈ 0.5–0.6° at horizon', refraction(0) > 0.45 && refraction(0) < 0.65);
+    ok('Refraction ≈ 0.16° at 5°',        Math.abs(refraction(5) - 0.16) < 0.03);
+    ok('Refraction tiny at 60°',          refraction(60) < 0.02);
+  }
+
+  const tiffSrc = grab('parseFloatTiff');
+  ok('parseFloatTiff() declared', !!tiffSrc);
+  if (tiffSrc) {
+    const parseFloatTiff = new Function(tiffSrc + '; return parseFloatTiff;')();
+    // Build a 4×2 little-endian float32 TIFF, tiled 2×2 blocks, last block sparse.
+    const vals = [1, 2, 3, 4, 5, 6, 7, 8];
+    const tags = [[256, 3, 4], [257, 3, 2], [258, 3, 32], [259, 3, 1], [277, 3, 1],
+                  [322, 3, 2], [323, 3, 2], [339, 3, 3]];
+    const n = tags.length + 2, ifd = 8, extra = ifd + 2 + n * 12 + 4;
+    const offs = extra, cnts = extra + 8, data = extra + 16;
+    const buf = new ArrayBuffer(data + 16), dv = new DataView(buf);
+    dv.setUint16(0, 0x4949); dv.setUint16(2, 42, true); dv.setUint32(4, ifd, true);
+    dv.setUint16(ifd, n, true);
+    const all = [...tags.map(([t, ty, v]) => [t, ty, 1, v]), [324, 4, 2, offs], [325, 4, 2, cnts]]
+      .sort((a, b) => a[0] - b[0]);
+    all.forEach(([t, ty, c, v], i) => { const e = ifd + 2 + i * 12;
+      dv.setUint16(e, t, true); dv.setUint16(e + 2, ty, true); dv.setUint32(e + 4, c, true);
+      if (ty === 3 && c === 1) dv.setUint16(e + 8, v, true); else dv.setUint32(e + 8, v, true); });
+    dv.setUint32(offs, data, true); dv.setUint32(offs + 4, 0, true);      // block 2 sparse
+    dv.setUint32(cnts, 16, true);   dv.setUint32(cnts + 4, 0, true);
+    [1, 2, 5, 6].forEach((v, i) => dv.setFloat32(data + i * 4, v, true)); // block 1 = cols 0-1
+    const t = parseFloatTiff(buf);
+    ok('parseFloatTiff reads tiled float32', t && t.width === 4 && t.height === 2 &&
+       t.data[0] === 1 && t.data[1] === 2 && t.data[4] === 5 && t.data[5] === 6);
+    ok('parseFloatTiff: sparse block → NaN', t && Number.isNaN(t.data[2]) && Number.isNaN(t.data[7]));
+    ok('parseFloatTiff rejects non-TIFF', parseFloatTiff(new ArrayBuffer(16)) === null);
+  }
+}
+
 /* ─── 10. CSS custom properties ──────────────────────────────────────── */
 console.log('\n── 10. CSS ──');
 

@@ -614,6 +614,17 @@ function metersPerPixel(z, coords) {
 /* ─── Sun position ───────────────────────────────────────────────────── */
 
 /**
+ * Atmospheric refraction (degrees) to add to a true altitude to get the
+ * apparent one — Sæmundsson's formula, standard pressure/temperature.
+ * ~0.57° at the horizon, ~0.16° at 5°, negligible above 45°.
+ */
+function refraction(trueAltDeg) {
+  if (trueAltDeg < -1.5) return 0;
+  const h = Math.max(trueAltDeg, -1);
+  return 1.02 / Math.tan((h + 10.3 / (h + 5.11)) * Math.PI / 180) / 60;
+}
+
+/**
  * Compute solar azimuth and altitude for a given moment and location.
  * Uses simplified NOAA / Spencer equations; accuracy ~0.5° for 2000–2050.
  *
@@ -622,7 +633,8 @@ function metersPerPixel(z, coords) {
  * @param {number} lngDeg – longitude +E (degrees)
  * @returns {{ azimuth: number, altitude: number }}
  *   azimuth  – degrees from north, CW (0=N 90=E 180=S 270=W)
- *   altitude – degrees above horizon (negative = below horizon)
+ *   altitude – apparent degrees above horizon, refraction included
+ *              (negative = below horizon)
  */
 function sunPosition(date, latDeg, lngDeg) {
   const D2R = Math.PI / 180;
@@ -657,60 +669,7 @@ function sunPosition(date, latDeg, lngDeg) {
   let azimuth = Math.acos(Math.max(-1, Math.min(1, cosAz))) / D2R;
   if (HA_r > 0) azimuth = 360 - azimuth;  // afternoon: sun moves west
 
-  return { azimuth, altitude };
-}
-
-/**
- * Compute a hillshade RGBA pixel array from a Terrarium elevation tile.
- * Shadow pixels are dark blue-grey; lit pixels are transparent.
- * Sun direction is read from state.shadowSun.
- *
- * Surface normal: cross(tangent_east, tangent_north) in (E, N, Up) = (-dz_east, dz_south, 1)
- */
-function computeHillshade(data, mpp) {
-  const { azimuth, altitude } = state.shadowSun;
-  const D2R = Math.PI / 180;
-  const az  = azimuth  * D2R;
-  const alt = altitude * D2R;
-  // Sun unit vector in (east, north, up)
-  const lx = Math.sin(az) * Math.cos(alt);
-  const ly = Math.cos(az) * Math.cos(alt);
-  const lz = Math.sin(alt);
-
-  // Decode all 256×256 elevations first (Terrarium: R*256 + G + B/256 - 32768)
-  const elev = new Float32Array(65536);
-  for (let i = 0; i < 65536; i++) {
-    const d = i << 2;
-    elev[i] = data[d] * 256 + data[d + 1] + data[d + 2] / 256 - 32768;
-  }
-
-  const out   = new Uint8ClampedArray(65536 << 2);
-  const night = lz <= 0;
-
-  for (let y = 0; y < 256; y++) {
-    const yN = y > 0   ? y - 1 : 0;
-    const yS = y < 255 ? y + 1 : 255;
-    for (let x = 0; x < 256; x++) {
-      const xW = x > 0   ? x - 1 : 0;
-      const xE = x < 255 ? x + 1 : 255;
-
-      // Finite-difference gradient (dimensionless: metres elevation / metre horizontal)
-      const dze = (elev[y  * 256 + xE] - elev[y  * 256 + xW]) / (2 * mpp);
-      const dzs = (elev[yS * 256 + x ] - elev[yN * 256 + x ]) / (2 * mpp);
-
-      // Normal = (-dze, dzs, 1) in (east, north, up); Lambertian dot product
-      const len   = Math.sqrt(dze * dze + dzs * dzs + 1);
-      const shade = Math.max(0, (-dze * lx + dzs * ly + lz) / len);
-
-      const a = night ? 210 : Math.round((1 - shade) * 190);
-      const i = (y * 256 + x) << 2;
-      out[i]     = 10;
-      out[i + 1] = 15;
-      out[i + 2] = 35;
-      out[i + 3] = a;
-    }
-  }
-  return out;
+  return { azimuth, altitude: altitude + refraction(altitude) };
 }
 
 /* ─── Elevation tile fetching ────────────────────────────────────────── */
@@ -759,6 +718,264 @@ function getElev(data, px, py) {
   return data[i] * 256 + data[i + 1] + data[i + 2] / 256 - 32768;
 }
 
+/* ─── Best-available elevation grids (used by the shadow layer) ──────── */
+// Every source is resampled onto the Web-Mercator pixel grid of a map tile
+// (256×256 Float32Array of metres, NaN = no data), so shadows can be ray-
+// marched across tiles from different sources in a single coordinate space.
+//
+// Priority at zoom ≥ ELEV_HIRES_MIN_ZOOM, per pixel:
+//   1. Kartverket DTM 1 m (Norway; CORS-enabled WCS, no key)
+//   2. NLS Finland DTM 2 m (via fetchWcsDem)
+//   3. AWS Terrarium (global; overzoomed from z15 above that)
+
+// Kartverket "Nasjonal høydemodell" bare-earth DTM, 1 m, EPSG:25833 native.
+// Requested in EPSG:4326 so columns line up with map tiles; GeoTIFF float32.
+const KARTVERKET_WCS_URL      = 'https://wcs.geonorge.no/skwms1/wcs.hoyde-dtm-nhm-25833';
+const KARTVERKET_COVERAGE     = 'nhm_dtm_topo_25833';
+const KARTVERKET_DEM_ATTRIB   = 'Elevation &copy; <a href="https://hoydedata.no">Kartverket</a>';
+const ELEV_HIRES_MIN_ZOOM     = 13;
+const TERRARIUM_MAX_NATIVE_Z  = 15;
+
+const gridCache = new Map();
+const GRID_CACHE_MAX = 120;   // × 256 KB — phones run out of memory well before desktops
+
+// Several tiles ask for the same neighbour grids at once; share one request.
+const _gridInflight = new Map();
+function _once(key, make) {
+  if (gridCache.has(key)) return Promise.resolve(gridCache.get(key));
+  if (!_gridInflight.has(key)) {
+    _gridInflight.set(key, make().finally(() => _gridInflight.delete(key)));
+  }
+  return _gridInflight.get(key);
+}
+function _gridCacheSet(key, val) {
+  if (gridCache.size >= GRID_CACHE_MAX) gridCache.delete(gridCache.keys().next().value);
+  gridCache.set(key, val);
+}
+
+/**
+ * Minimal GeoTIFF reader for what the Kartverket WCS returns: uncompressed,
+ * single-band float32, tiled or stripped, either byte order. Tiles/strips
+ * with offset 0 are "sparse" (no data) and come back as NaN.
+ * Returns { width, height, data: Float32Array } or null if unsupported.
+ */
+function parseFloatTiff(buf) {
+  const dv = new DataView(buf);
+  if (dv.byteLength < 8) return null;
+  const le = dv.getUint16(0) === 0x4949;
+  if (!le && dv.getUint16(0) !== 0x4d4d) return null;
+  if (dv.getUint16(2, le) !== 42) return null;
+
+  const SIZE = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 16: 8 };
+  const ifd  = dv.getUint32(4, le);
+  const n    = dv.getUint16(ifd, le);
+  const tags = {};
+  for (let i = 0; i < n; i++) {
+    const e = ifd + 2 + i * 12;
+    const tag = dv.getUint16(e, le), type = dv.getUint16(e + 2, le), count = dv.getUint32(e + 4, le);
+    const bytes = (SIZE[type] || 1) * count;
+    const at = bytes <= 4 ? e + 8 : dv.getUint32(e + 8, le);
+    const vals = [];
+    for (let k = 0; k < Math.min(count, 4096); k++) {
+      if (type === 3)       vals.push(dv.getUint16(at + k * 2, le));
+      else if (type === 4)  vals.push(dv.getUint32(at + k * 4, le));
+      else if (type === 16) vals.push(Number(dv.getBigUint64(at + k * 8, le)));
+      else break;
+    }
+    tags[tag] = vals;
+  }
+
+  const width  = tags[256]?.[0], height = tags[257]?.[0];
+  const bps    = tags[258]?.[0], comp   = tags[259]?.[0] ?? 1;
+  const fmt    = tags[339]?.[0] ?? 1, spp = tags[277]?.[0] ?? 1;
+  if (!width || !height || bps !== 32 || comp !== 1 || fmt !== 3 || spp !== 1) return null;
+
+  const tiled = !!tags[322];
+  const bw = tiled ? tags[322][0] : width;
+  const bh = tiled ? tags[323][0] : (tags[278]?.[0] ?? height);
+  const offs = tiled ? tags[324] : tags[273];
+  if (!offs) return null;
+  const across = Math.ceil(width / bw);
+
+  const data = new Float32Array(width * height).fill(NaN);
+  offs.forEach((off, b) => {
+    if (!off) return;   // sparse block
+    const ox = (b % across) * bw, oy = Math.floor(b / across) * bh;
+    for (let r = 0; r < bh && oy + r < height; r++) {
+      for (let c = 0; c < bw && ox + c < width; c++) {
+        const p = off + (r * bw + c) * 4;
+        if (p + 4 > dv.byteLength) return;
+        data[(oy + r) * width + ox + c] = dv.getFloat32(p, le);
+      }
+    }
+  });
+  return { width, height, data };
+}
+
+/** Latitude/longitude edges of a tile. */
+function _tileEdges(x, y, z) {
+  const nw = tilePixelToLatLon(x, y, z, 0, 0);
+  const se = tilePixelToLatLon(x, y, z, 256, 256);
+  return { west: nw.lon, north: nw.lat, east: se.lon, south: se.lat };
+}
+
+/**
+ * Kartverket DTM for a map tile: a grid, null where Norway has no data, or
+ * undefined after a transient failure (so callers don't cache the fallback).
+ */
+async function fetchKartverketGrid(x, y, z) {
+  const key = `kv:${z}/${x}/${y}`;
+  if (gridCache.has(key)) return gridCache.get(key);
+
+  const { west, north, east, south } = _tileEdges(x, y, z);
+  // Coverage envelope (mainland Norway; Svalbard is not in this model)
+  if (east < 4 || west > 31.5 || north < 57.8 || south > 71.4) return null;
+
+  const params = new URLSearchParams({
+    service: 'WCS', version: '1.0.0', request: 'GetCoverage',
+    coverage: KARTVERKET_COVERAGE, crs: 'EPSG:4326', format: 'GeoTIFF',
+    // Map pixels are 2–5 m at the zooms that use this; nearest-neighbour
+    // sampling of the 1 m model aliases into cross-hatched noise.
+    interpolation: 'bilinear',
+    bbox: [west, south, east, north].map(v => v.toFixed(7)).join(','),
+    width: '256', height: '256',
+  });
+
+  let grid = null;
+  try {
+    const res = await fetch(`${KARTVERKET_WCS_URL}?${params}`, { signal: AbortSignal.timeout(15000) });
+    if (res.ok) {
+      const tif = parseFloatTiff(await res.arrayBuffer());
+      if (tif && tif.width === 256 && tif.height === 256) {
+        // The response's rows are linear in latitude; map rows are linear in
+        // Mercator y. Resample rows (columns already match: both linear in lon).
+        grid = new Float32Array(65536).fill(NaN);
+        let any = false;
+        for (let py = 0; py < 256; py++) {
+          const lat = tilePixelToLatLon(x, y, z, 0, py + 0.5).lat;
+          const r = Math.max(0, Math.min(255, (north - lat) / (north - south) * 256 - 0.5));
+          const r0 = Math.floor(r), r1 = Math.min(255, r0 + 1), f = r - r0;
+          for (let px = 0; px < 256; px++) {
+            let a = tif.data[r0 * 256 + px], b = tif.data[r1 * 256 + px];
+            // Outside Norway the model is filled with exactly 0 → no data
+            if (a === 0) a = NaN;
+            if (b === 0) b = NaN;
+            const v = a !== a ? b : b !== b ? a : a * (1 - f) + b * f;
+            grid[py * 256 + px] = v;
+            if (v === v) any = true;
+          }
+        }
+        if (!any) grid = null;
+      }
+    } else {
+      return undefined;   // transient server error: retry next time
+    }
+  } catch {
+    return undefined;
+  }
+  _gridCacheSet(key, grid);
+  return grid;
+}
+
+/** NLS Finland 2 m DTM resampled onto a map tile, or null. */
+async function fetchNlsGrid(x, y, z) {
+  const { west, north, east, south } = _tileEdges(x, y, z);
+  if (east < 19.5 || west > 31.6 || north < 59.7 || south > 70.1) return null;
+  const dem = await fetchWcsDem(x, y, z);
+  if (!dem) return null;
+  const grid = new Float32Array(65536);
+  let any = false;
+  for (let py = 0; py < 256; py++) {
+    for (let px = 0; px < 256; px++) {
+      const { lat, lon } = tilePixelToLatLon(x, y, z, px + 0.5, py + 0.5);
+      const p = toTM35FIN(lon, lat);
+      const v = sampleGrid(dem, p.E, p.N);
+      grid[py * 256 + px] = v;
+      if (v === v) any = true;
+    }
+  }
+  return any ? grid : null;
+}
+
+/** Terrarium elevations for a map tile; above z15 bilinearly upsampled from the z15 parent. */
+function fetchTerrariumGrid(x, y, z) {
+  return _once(`tr:${z}/${x}/${y}`, () => _fetchTerrariumGrid(x, y, z));
+}
+
+async function _fetchTerrariumGrid(x, y, z) {
+  const key = `tr:${z}/${x}/${y}`;
+
+  const dz = Math.max(0, z - TERRARIUM_MAX_NATIVE_Z);
+  const k  = 2 ** dz;
+  const data = await fetchElevTile(x >> dz, y >> dz, z - dz);
+  if (!data) return null;
+
+  const grid = new Float32Array(65536);
+  if (dz === 0) {
+    for (let i = 0; i < 65536; i++) {
+      const d = i << 2;
+      grid[i] = data[d] * 256 + data[d + 1] + data[d + 2] / 256 - 32768;
+    }
+  } else {
+    const offX = (x % k) * 256 / k, offY = (y % k) * 256 / k;
+    for (let py = 0; py < 256; py++) {
+      const v  = Math.max(0, Math.min(255, offY + (py + 0.5) / k - 0.5));
+      const y0 = Math.floor(v), y1 = Math.min(255, y0 + 1), fy = v - y0;
+      for (let px = 0; px < 256; px++) {
+        const u  = Math.max(0, Math.min(255, offX + (px + 0.5) / k - 0.5));
+        const x0 = Math.floor(u), x1 = Math.min(255, x0 + 1), fx = u - x0;
+        grid[py * 256 + px] =
+          getElev(data, x0, y0) * (1 - fx) * (1 - fy) + getElev(data, x1, y0) * fx * (1 - fy) +
+          getElev(data, x0, y1) * (1 - fx) * fy       + getElev(data, x1, y1) * fx * fy;
+      }
+    }
+  }
+  _gridCacheSet(key, grid);
+  return grid;
+}
+
+/**
+ * Best elevation grid for a map tile: high-resolution national DEMs where
+ * available (gaps filled from Terrarium), Terrarium elsewhere.
+ * Returns { grid, source } or null.
+ */
+function fetchBestElevGrid(x, y, z) {
+  const n = 2 ** z;
+  if (y < 0 || y >= n) return Promise.resolve(null);
+  x = ((x % n) + n) % n;
+  return _once(`best:${z}/${x}/${y}`, () => _fetchBestElevGrid(x, y, z));
+}
+
+async function _fetchBestElevGrid(x, y, z) {
+  const key = `best:${z}/${x}/${y}`;
+
+  const base = fetchTerrariumGrid(x, y, z);
+  let hi = null, source = 'Terrarium', complete = true;
+  if (z >= ELEV_HIRES_MIN_ZOOM) {
+    hi = await fetchKartverketGrid(x, y, z);
+    if (hi === undefined) complete = false;
+    if (hi) source = 'Kartverket';
+    else {
+      hi = await fetchNlsGrid(x, y, z);
+      if (hi) source = 'NLS';
+    }
+  }
+  const tr = await base;
+  if (!hi && !tr) return null;
+
+  let grid = tr;
+  if (hi) {
+    grid = new Float32Array(65536);
+    for (let i = 0; i < 65536; i++) {
+      const h = hi[i];
+      grid[i] = h === h ? h : tr ? tr[i] : NaN;
+    }
+  }
+  const result = { grid, source };
+  if (complete && tr) _gridCacheSet(key, result);
+  return result;
+}
+
 /* ─── Slope layer instance ───────────────────────────────────────────── */
 
 const slopeLayer = new SlopeLayer({
@@ -770,22 +987,161 @@ const slopeLayer = new SlopeLayer({
 
 const heatmapLayer = stravaHeatmap;
 
-/* ─── Shadow (hillshade) layer ───────────────────────────────────────── */
+/* ─── Shadow layer (terrain cast shadows) ────────────────────────────── */
+// Each tile is shaded by computeShadow() (shadow-worker.js) running in a
+// small worker pool. The tile gets two elevation mosaics:
+//   near — the tile plus its sun-side neighbours at the same zoom, from the
+//          best DEM (Kartverket/NLS/Terrarium);
+//   far  — Terrarium SHADOW_FAR_DZ zooms coarser, sun-side half of 5×5
+//          tiles, so a ridge 10–30 km away can still shadow the tile when
+//          the sun is low.
+
+const SHADOW_FAR_DZ = 4;   // far grid: 16× coarser, ±2 tiles → ~30 tiles of reach
+
+const _shadowWorkers = [];
+const _shadowJobs    = new Map();
+let   _shadowJobId   = 0;
+let   _shadowNextW   = 0;
+let   _shadowNoWorker = false;
+
+function _shadowCompute(params) {
+  if (!_shadowNoWorker && !_shadowWorkers.length) {
+    try {
+      const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+      for (let i = 0; i < n; i++) {
+        const w = new Worker('shadow-worker.js');
+        w.onmessage = e => {
+          const job = _shadowJobs.get(e.data.id);
+          _shadowJobs.delete(e.data.id);
+          if (job) job(e.data.rgba);
+        };
+        _shadowWorkers.push(w);
+      }
+    } catch {
+      _shadowNoWorker = true;   // e.g. file:// — compute on the main thread
+    }
+  }
+  if (_shadowNoWorker) return Promise.resolve(computeShadow(params));
+
+  return new Promise(resolve => {
+    const id = ++_shadowJobId;
+    _shadowJobs.set(id, resolve);
+    const transfer = [params.near.buffer];
+    if (params.far) transfer.push(params.far.buffer);
+    _shadowWorkers[_shadowNextW++ % _shadowWorkers.length].postMessage({ id, params }, transfer);
+  });
+}
+
+/** Terrarium-only grid (for the coarse far field), with tile-range guards. */
+function _farElevGrid(x, y, z) {
+  const n = 2 ** z;
+  if (y < 0 || y >= n) return Promise.resolve(null);
+  return fetchTerrariumGrid(((x % n) + n) % n, y, z);
+}
+
+/** Is the tile at offset (ox, oy) from the centre tile on the sun side? */
+function _sunSide(ox, oy) {
+  if (!ox && !oy) return true;
+  const az = state.shadowSun.azimuth * Math.PI / 180;
+  return ox * Math.sin(az) - oy * Math.cos(az) > 0.2;
+}
+
+/** Fetch the (2r+1)² block of grids around (cx, cy) that face the sun. */
+async function _fetchBlock(cx, cy, z, r, fetchGrid) {
+  const parts = [];
+  for (let oy = -r; oy <= r; oy++) {
+    for (let ox = -r; ox <= r; ox++) {
+      if (!_sunSide(ox, oy)) continue;
+      parts.push(fetchGrid(cx + ox, cy + oy, z).then(g => g && { ox, oy, grid: g.grid || g }));
+    }
+  }
+  return { cx, cy, r, parts: (await Promise.all(parts)).filter(Boolean) };
+}
+
+/** Stitch a fetched block into one Float32Array (NaN where missing). */
+function _stitch({ cx, cy, r, parts }) {
+  const W = (2 * r + 1) * 256;
+  const data = new Float32Array(W * W).fill(NaN);
+  for (const { ox, oy, grid } of parts) {
+    const bx = (ox + r) * 256, by = (oy + r) * 256;
+    for (let row = 0; row < 256; row++) {
+      data.set(grid.subarray(row * 256, row * 256 + 256), (by + row) * W + bx);
+    }
+  }
+  return { data, W, ox: (cx - r) * 256, oy: (cy - r) * 256 };
+}
+
+// Mosaics are a few MB each, so only a handful of tiles are stitched and
+// shaded at once; the rest wait here with just their (shared, cached) grids.
+let _shadowSlotsFree = Math.max(2, Math.min(5, navigator.hardwareConcurrency || 2));
+const _shadowSlotQueue = [];
+function _shadowAcquire() {
+  if (_shadowSlotsFree > 0) { _shadowSlotsFree--; return Promise.resolve(); }
+  return new Promise(r => _shadowSlotQueue.push(r));
+}
+function _shadowRelease() {
+  const next = _shadowSlotQueue.shift();
+  if (next) next(); else _shadowSlotsFree++;
+}
+
+async function renderShadowTile(coords, canvas, gen) {
+  const { x, y, z } = coords;
+  const sun = state.shadowSun;
+
+  let rgba;
+  if (sun.altitude <= 0) {
+    rgba = computeShadow({ altitude: sun.altitude });
+  } else {
+    const zf = Math.max(0, z - SHADOW_FAR_DZ);
+    const k  = 2 ** (z - zf);
+    const [nearBlock, farBlock] = await Promise.all([
+      _fetchBlock(x, y, z, 1, fetchBestElevGrid),
+      _fetchBlock(Math.floor(x / k), Math.floor(y / k), zf, 2, _farElevGrid),
+    ]);
+    if (gen !== shadowLayer._gen) return;   // sun moved on; a newer render is coming
+
+    await _shadowAcquire();
+    try {
+      if (gen !== shadowLayer._gen) return;
+      const near = _stitch(nearBlock), far = _stitch(farBlock);
+      rgba = await _shadowCompute({
+        near: near.data, nearW: near.W, nearH: near.W, nearOx: near.ox, nearOy: near.oy,
+        far:  far.data,  farW:  far.W,  farH:  far.W,  farOx:  far.ox,  farOy:  far.oy,
+        farScale: k,
+        tileOx: x * 256, tileOy: y * 256,
+        mpp: metersPerPixel(z, coords),
+        azimuth: sun.azimuth, altitude: sun.altitude,
+      });
+    } finally {
+      _shadowRelease();
+    }
+  }
+  if (rgba && gen === shadowLayer._gen) {
+    canvas.getContext('2d').putImageData(new ImageData(rgba, 256, 256), 0, 0);
+  }
+}
 
 const ShadowLayer = L.GridLayer.extend({
+  _gen: 0,
+
   createTile(coords, done) {
     const canvas = document.createElement('canvas');
     canvas.width  = 256;
     canvas.height = 256;
-    const mpp = metersPerPixel(coords.z, coords);
-    fetchElevTile(coords.x, coords.y, coords.z).then(data => {
-      if (data) {
-        const ctx = canvas.getContext('2d');
-        ctx.putImageData(new ImageData(computeHillshade(data, mpp), 256, 256), 0, 0);
-      }
-      done(null, canvas);
-    }).catch(() => done(null, canvas));
+    renderShadowTile(coords, canvas, this._gen)
+      .catch(err => console.warn('Shadow tile error', coords, err))
+      .finally(() => done(null, canvas));
     return canvas;
+  },
+
+  /** Re-shade the tiles already on screen in place (no blank flash). */
+  refresh() {
+    const gen = ++this._gen;
+    for (const key in this._tiles) {
+      const t = this._tiles[key];
+      startLoading();
+      renderShadowTile(t.coords, t.el, gen).catch(() => {}).finally(stopLoading);
+    }
   },
 });
 
@@ -794,7 +1150,12 @@ const shadowLayer = new ShadowLayer({
   maxZoom: 18,
   pane:    'overlayPane',
   zIndex:  450,    // above slope overlay (400)
+  attribution: KARTVERKET_DEM_ATTRIB,
 });
+
+shadowLayer.on('tileloadstart', startLoading);
+shadowLayer.on('tileload',      stopLoading);
+shadowLayer.on('tileerror',     stopLoading);
 
 /** Reload slope tiles when settings change (debounced). */
 let redrawTimer = null;
@@ -814,6 +1175,8 @@ function redrawSlope() {
  * Recompute sun position from state.shadowDate + current map centre, then
  * redraw the 2D hillshade overlay and/or update MapLibre 3D lighting.
  */
+let _shadowShownSun = null;   // sun the 2D shadow tiles were last shaded for
+
 function updateShadow() {
   const c   = map.getCenter();
   const sun = sunPosition(state.shadowDate, c.lat, c.lng);
@@ -841,9 +1204,16 @@ function updateShadow() {
     } catch { /* setLight signature differs across MapLibre versions */ }
   }
 
-  // Redraw 2D hillshade when 2D view is visible
+  // Re-shade the 2D tiles in place when the sun has actually moved. Panning
+  // shifts the sun by well under 0.2° per 10 km, so most pans skip this.
   if (state.shadowActive && map3dEl.classList.contains('hidden')) {
-    shadowLayer.redraw();
+    const last = _shadowShownSun;
+    if (!last || Math.abs(last.altitude - sun.altitude) > 0.2 ||
+        Math.abs(last.azimuth - sun.azimuth) > 0.2 ||
+        (last.altitude > 0) !== (sun.altitude > 0)) {
+      _shadowShownSun = sun;
+      shadowLayer.refresh();
+    }
   }
 }
 
