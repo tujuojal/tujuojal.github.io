@@ -322,6 +322,51 @@ ok('Kartverket requested with bilinear interpolation', /interpolation:\s*'biline
   }
 }
 
+/* ─── 9d. NLS grids & datum alignment ─────────────────────────────────── */
+console.log('\n── 9d. NLS grids & datum alignment ──');
+
+for (const c of ['slopeLayer', 'heatmapLayer', 'shadowLayer']) {
+  ok(`const ${c} declared`, new RegExp(`^const ${c}\\s*=`, 'm').test(appSrc));
+}
+{
+  const grab = name => {
+    const m = appSrc.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`));
+    return m && m[0];
+  };
+  const parseAsciiGrid = new Function(grab('parseAsciiGrid') + '; return parseAsciiGrid;')();
+  const sampleGrid     = new Function(grab('sampleGrid') + '; return sampleGrid;')();
+
+  // NLS with SCALEFACTOR < 1 writes dx/dy (non-square cells), not cellsize
+  const g = parseAsciiGrid('ncols 3\nnrows 2\nxllcorner 1000\nyllcorner 5000\ndx 8.008\ndy 8\n' +
+                           '1 2 3\n4 5 6\n');
+  ok('parseAsciiGrid reads dx/dy', g.cellX === 8.008 && g.cellY === 8);
+  ok('parseAsciiGrid reads values row-major', g.grid[0] === 1 && g.grid[5] === 6);
+  // Cell centres: col 0 at E = 1004.004, row 0 (top) at N = 5012
+  ok('sampleGrid hits cell centre (top-left)',  Math.abs(sampleGrid(g, 1004.004, 5012) - 1) < 1e-6);
+  ok('sampleGrid hits cell centre (bottom-right)', Math.abs(sampleGrid(g, 1000 + 8.008 * 2.5, 5004) - 6) < 1e-6);
+  ok('sampleGrid interpolates between centres',  Math.abs(sampleGrid(g, 1000 + 8.008 * 1.5, 5008) - 3.5) < 1e-6);
+  ok('sampleGrid: NaN well outside the grid (no edge streaks)', Number.isNaN(sampleGrid(g, 1100, 5004)));
+  ok('sampleGrid: nearest edge value just outside', sampleGrid(g, 999, 5004) === 4);
+
+  const datumOffset = new Function(grab('_datumOffset') + '; return _datumOffset;')();
+  const hi = new Float32Array(65536).map((_, i) => 200 + (i % 7));
+  const tr = hi.map(v => v + 24);
+  for (let i = 0; i < 2000; i++) tr[i] = NaN;
+  ok('_datumOffset finds a constant −24 m datum shift', Math.abs(datumOffset(hi, tr) + 24) < 1e-4);
+  ok('_datumOffset null without overlap', datumOffset(hi, new Float32Array(65536).fill(NaN)) === null);
+}
+{
+  const vm = require('vm');
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'shadow-worker.js'), 'utf8') + '\nthis.computeShadow = computeShadow;', ctx);
+  const flat = new Float32Array(768 * 768).fill(300);
+  const r = ctx.computeShadow({ near: flat, nearW: 768, nearH: 768, nearOx: 0, nearOy: 0, far: null,
+    tileOx: 256, tileOy: 256, mpp: 4, azimuth: 200, altitude: 5 });
+  let n = 0; for (let i = 3; i < r.length; i += 4) if (r[i]) n++;
+  ok('Flat ground under a 5° sun is not tinted', n === 0);
+}
+
 /* ─── 10. CSS custom properties ──────────────────────────────────────── */
 console.log('\n── 10. CSS ──');
 

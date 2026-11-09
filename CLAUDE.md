@@ -61,7 +61,11 @@ Tile data is cached in two LRU-style `Map`s: `elevCache` (Terrarium RGBA arrays)
 2. **NLS** 2 m DTM (`fetchNlsGrid`, via `fetchWcsDem`) — Finland.
 3. **Terrarium** (`fetchTerrariumGrid`) — global; above z15 upsampled from the z15 parent (Terrarium has no z16+).
 
-Grids are cached in `gridCache`, and concurrent requests for the same grid share one fetch (`_once`).
+Grids are cached in `gridCache`, and concurrent requests for the same grid share one fetch (`_once`). A grid built after a *transient* high-res failure (timeout/5xx — `fetchKartverketGrid`/`fetchWcsDem` return `undefined` for these, `null` for "no data here") is marked `complete: false`, not cached, and the tile re-shades itself a few seconds later (`ShadowLayer._shade`).
+
+**Datum offset:** Terrarium heights differ from the national models (≈ −20…−26 m NLS − Terrarium around Pyhätunturi, a few m in Norway). `_datumOffset()` measures the median difference per high-res tile, and `renderShadowTile()` shifts all Terrarium terrain in the mosaics (far field, fallback neighbours) by it — otherwise every Terrarium/high-res seam is a cliff that throws long false shadows at low sun.
+
+**NLS ASCII grids:** with `SCALEFACTOR` < 1 the cells come back slightly non-square and GDAL writes `dx`/`dy` instead of `cellsize` — `parseAsciiGrid()` handles both (`cellX`/`cellY`). `sampleGrid()` returns NaN more than one cell outside the grid instead of smearing edge values. NLS requests run at most `WCS_MAX_PARALLEL` at a time (`_wcsRequest`), with one retry.
 
 In 3D mode, shadow is applied as MapLibre `setLight()`, which in practice has no visible effect on terrain (MapLibre lights only fill-extrusions).
 

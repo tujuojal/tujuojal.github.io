@@ -313,8 +313,9 @@ function tileBoundsInTM35FIN(tileX, tileY, z) {
 /* ─── NLS Finland WCS elevation (korkeusmalli_2m) ───────────────────── */
 /**
  * Fetch a DEM patch for one tile from the NLS WCS service.
- * Returns { grid: Float32Array, nCols, nRows, xll, yll, cellSize }
- * or null on failure / no API key / outside Finland.
+ * Returns { grid: Float32Array, nCols, nRows, xll, yll, cellX, cellY },
+ * null when there is no data (outside Finland, request rejected), or
+ * undefined after a transient failure (timeout, network, 5xx).
  *
  * The WCS returns an ESRI ASCII Grid.  We request a resolution matched to
  * the tile's pixel size (capped to the 2 m native resolution).
@@ -354,17 +355,45 @@ async function fetchWcsDem(tileX, tileY, z) {
 
   const cacheKey = `wcs:${tileX}/${tileY}/${z}`;
   if (wcsCache.has(cacheKey)) return wcsCache.get(cacheKey);
+  // Slope and shadow layers often want the same patch at the same time
+  if (_wcsInflight.has(cacheKey)) return _wcsInflight.get(cacheKey);
 
+  const job = (async () => {
+    let result;
+    for (let attempt = 0; attempt < 2 && result === undefined; attempt++) {
+      result = await _wcsRequest(`${wcsBase}?${params}`);
+    }
+    if (result) {
+      if (wcsCache.size >= CACHE_MAX) wcsCache.delete(wcsCache.keys().next().value);
+      wcsCache.set(cacheKey, result);
+    }
+    return result;
+  })().finally(() => _wcsInflight.delete(cacheKey));
+  _wcsInflight.set(cacheKey, job);
+  return job;
+}
+
+// NLS answers a GetCoverage in 1–6 s; firing dozens at once (a screenful of
+// shadow tiles plus neighbours) makes many of them time out. Run a few at a
+// time — the timeout covers only the request itself, not time in the queue.
+const WCS_MAX_PARALLEL = 4;
+const _wcsInflight = new Map();
+let   _wcsActive = 0;
+const _wcsWaiting = [];
+
+async function _wcsRequest(url) {
+  if (_wcsActive >= WCS_MAX_PARALLEL) await new Promise(r => _wcsWaiting.push(r));
+  _wcsActive++;
   try {
-    const res = await fetch(`${wcsBase}?${params}`, { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return null;
-    const text = await res.text();
-    const dem = parseAsciiGrid(text);
-    if (wcsCache.size >= CACHE_MAX) wcsCache.delete(wcsCache.keys().next().value);
-    wcsCache.set(cacheKey, dem);
-    return dem;
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return res.status >= 500 || res.status === 429 ? undefined : null;
+    return parseAsciiGrid(await res.text());
   } catch {
-    return null;
+    return undefined;   // network error / timeout: worth retrying later
+  } finally {
+    _wcsActive--;
+    const next = _wcsWaiting.shift();
+    if (next) next();
   }
 }
 
@@ -385,9 +414,13 @@ function parseAsciiGrid(text) {
 
   const nCols   = header.ncols   || 0;
   const nRows   = header.nrows   || 0;
-  const xll     = header.xllcorner !== undefined ? header.xllcorner : header.xllcenter;
-  const yll     = header.yllcorner !== undefined ? header.yllcorner : header.yllcenter;
-  const cs      = header.cellsize  || 2;
+  // GDAL writes `dx`/`dy` instead of `cellsize` when cells aren't exactly
+  // square, which NLS does whenever SCALEFACTOR < 1 (e.g. 8.008 × 8.000 m).
+  const cellX   = header.cellsize || header.dx || 2;
+  const cellY   = header.cellsize || header.dy || cellX;
+  // Normalise to the lower-left *corner* of the grid
+  const xll     = header.xllcorner !== undefined ? header.xllcorner : header.xllcenter - cellX / 2;
+  const yll     = header.yllcorner !== undefined ? header.yllcorner : header.yllcenter - cellY / 2;
   const nodata  = header.nodata_value !== undefined ? header.nodata_value : -9999;
 
   const grid = new Float32Array(nCols * nRows);
@@ -401,22 +434,26 @@ function parseAsciiGrid(text) {
     }
   }
 
-  return { grid, nCols, nRows, xll, yll, cellSize: cs };
+  return { grid, nCols, nRows, xll, yll, cellX, cellY };
 }
 
 /**
  * Bilinearly sample an ASCII grid at TM35FIN coordinates (E, N).
  * ESRI ASCII grid: row 0 = top (max northing), row nRows-1 = bottom (min northing).
+ * Points up to one cell outside the grid take the nearest edge value; points
+ * further out return NaN (stretching edge values across them makes streaks).
  */
 function sampleGrid(dem, E, N) {
-  const { grid, nCols, nRows, xll, yll, cellSize } = dem;
-  const col = (E - xll) / cellSize;
-  const row = nRows - 1 - (N - yll) / cellSize;
+  const { grid, nCols, nRows, xll, yll, cellX, cellY } = dem;
+  // Fractional cell index, measured between cell centres
+  const col = (E - xll) / cellX - 0.5;
+  const row = nRows - 0.5 - (N - yll) / cellY;
 
   const c0 = Math.floor(col), c1 = c0 + 1;
   const r0 = Math.floor(row), r1 = r0 + 1;
 
   if (c0 < 0 || c1 >= nCols || r0 < 0 || r1 >= nRows) {
+    if (col < -1 || col > nCols || row < -1 || row > nRows) return NaN;
     const c = Math.max(0, Math.min(nCols - 1, Math.round(col)));
     const r = Math.max(0, Math.min(nRows - 1, Math.round(row)));
     return grid[r * nCols + c];
@@ -877,12 +914,12 @@ async function fetchKartverketGrid(x, y, z) {
   return grid;
 }
 
-/** NLS Finland 2 m DTM resampled onto a map tile, or null. */
+/** NLS Finland 2 m DTM resampled onto a map tile: grid, null (no data) or undefined (transient failure). */
 async function fetchNlsGrid(x, y, z) {
   const { west, north, east, south } = _tileEdges(x, y, z);
   if (east < 19.5 || west > 31.6 || north < 59.7 || south > 70.1) return null;
   const dem = await fetchWcsDem(x, y, z);
-  if (!dem) return null;
+  if (!dem) return dem;
   const grid = new Float32Array(65536);
   let any = false;
   for (let py = 0; py < 256; py++) {
@@ -952,28 +989,50 @@ async function _fetchBestElevGrid(x, y, z) {
   const base = fetchTerrariumGrid(x, y, z);
   let hi = null, source = 'Terrarium', complete = true;
   if (z >= ELEV_HIRES_MIN_ZOOM) {
-    hi = await fetchKartverketGrid(x, y, z);
-    if (hi === undefined) complete = false;
-    if (hi) source = 'Kartverket';
-    else {
-      hi = await fetchNlsGrid(x, y, z);
-      if (hi) source = 'NLS';
-    }
+    // Both coverage boxes include the Norway–Finland border region, so ask
+    // both at once rather than waiting for one to come back empty.
+    const [kv, nls] = await Promise.all([fetchKartverketGrid(x, y, z), fetchNlsGrid(x, y, z)]);
+    if (kv) { hi = kv; source = 'Kartverket'; }
+    else if (nls) { hi = nls; source = 'NLS'; }
+    if (!hi && (kv === undefined || nls === undefined)) complete = false;
   }
   const tr = await base;
   if (!hi && !tr) return null;
 
-  let grid = tr;
+  let grid = tr, offset = null;
   if (hi) {
+    offset = tr ? _datumOffset(hi, tr) : null;
+    const shift = offset || 0;
     grid = new Float32Array(65536);
     for (let i = 0; i < 65536; i++) {
       const h = hi[i];
-      grid[i] = h === h ? h : tr ? tr[i] : NaN;
+      grid[i] = h === h ? h : tr ? tr[i] + shift : NaN;
     }
   }
-  const result = { grid, source };
-  if (complete && tr) _gridCacheSet(key, result);
+  // offset: how far Terrarium sits above/below the national model here
+  // (−24 m around Pyhätunturi), so Terrarium terrain can be shifted to match.
+  // complete = false: a high-res source failed transiently; the tile should
+  // be re-shaded later rather than keep the Terrarium stand-in.
+  const result = { grid, source, offset, complete: complete && !!tr };
+  if (result.complete) _gridCacheSet(key, result);
   return result;
+}
+
+/**
+ * Median of (hi − terrarium) over a sample of pixels where both have data.
+ * Terrarium's vertical datum differs from the national models by up to
+ * ~25 m in northern Finland; unless corrected, every Terrarium tile next to
+ * a high-res one becomes a cliff that throws long false shadows.
+ */
+function _datumOffset(hi, tr) {
+  const d = [];
+  for (let i = 0; i < 65536; i += 37) {
+    const a = hi[i], b = tr[i];
+    if (a === a && b === b) d.push(a - b);
+  }
+  if (d.length < 50) return null;
+  d.sort((p, q) => p - q);
+  return d[d.length >> 1];
 }
 
 /* ─── Slope layer instance ───────────────────────────────────────────── */
@@ -1052,20 +1111,32 @@ async function _fetchBlock(cx, cy, z, r, fetchGrid) {
   for (let oy = -r; oy <= r; oy++) {
     for (let ox = -r; ox <= r; ox++) {
       if (!_sunSide(ox, oy)) continue;
-      parts.push(fetchGrid(cx + ox, cy + oy, z).then(g => g && { ox, oy, grid: g.grid || g }));
+      parts.push(fetchGrid(cx + ox, cy + oy, z).then(g => g && {
+        ox, oy,
+        grid:   g.grid || g,
+        hires:  !!g.source && g.source !== 'Terrarium',
+        offset: g.offset ?? null,
+        complete: g.complete !== false,
+      }));
     }
   }
   return { cx, cy, r, parts: (await Promise.all(parts)).filter(Boolean) };
 }
 
-/** Stitch a fetched block into one Float32Array (NaN where missing). */
-function _stitch({ cx, cy, r, parts }) {
+/**
+ * Stitch a fetched block into one Float32Array (NaN where missing), adding
+ * `terrariumShift` to Terrarium-only parts so they line up with high-res ones.
+ */
+function _stitch({ cx, cy, r, parts }, terrariumShift = 0) {
   const W = (2 * r + 1) * 256;
   const data = new Float32Array(W * W).fill(NaN);
-  for (const { ox, oy, grid } of parts) {
+  for (const { ox, oy, grid, hires } of parts) {
     const bx = (ox + r) * 256, by = (oy + r) * 256;
+    const shift = hires ? 0 : terrariumShift;
     for (let row = 0; row < 256; row++) {
-      data.set(grid.subarray(row * 256, row * 256 + 256), (by + row) * W + bx);
+      const at = (by + row) * W + bx;
+      data.set(grid.subarray(row * 256, row * 256 + 256), at);
+      if (shift) for (let c = 0; c < 256; c++) data[at + c] += shift;
     }
   }
   return { data, W, ox: (cx - r) * 256, oy: (cy - r) * 256 };
@@ -1084,11 +1155,15 @@ function _shadowRelease() {
   if (next) next(); else _shadowSlotsFree++;
 }
 
+/**
+ * Shade one tile into its canvas. Resolves true if some elevation came from
+ * a stand-in after a transient high-res failure (caller may retry later).
+ */
 async function renderShadowTile(coords, canvas, gen) {
   const { x, y, z } = coords;
   const sun = state.shadowSun;
 
-  let rgba;
+  let rgba, incomplete = false;
   if (sun.altitude <= 0) {
     rgba = computeShadow({ altitude: sun.altitude });
   } else {
@@ -1098,12 +1173,19 @@ async function renderShadowTile(coords, canvas, gen) {
       _fetchBlock(x, y, z, 1, fetchBestElevGrid),
       _fetchBlock(Math.floor(x / k), Math.floor(y / k), zf, 2, _farElevGrid),
     ]);
-    if (gen !== shadowLayer._gen) return;   // sun moved on; a newer render is coming
+    if (gen !== shadowLayer._gen) return false;   // sun moved on; a newer render is coming
+    incomplete = nearBlock.parts.some(q => !q.complete);
 
     await _shadowAcquire();
     try {
-      if (gen !== shadowLayer._gen) return;
-      const near = _stitch(nearBlock), far = _stitch(farBlock);
+      if (gen !== shadowLayer._gen) return false;
+      // Shift Terrarium terrain (far field, and any neighbour without
+      // high-res data) onto the national model's datum.
+      const offs = nearBlock.parts.filter(q => q.hires && q.offset !== null);
+      const own  = offs.find(q => !q.ox && !q.oy);
+      const shift = own ? own.offset
+                  : offs.length ? offs.map(q => q.offset).sort((a, b) => a - b)[offs.length >> 1] : 0;
+      const near = _stitch(nearBlock, shift), far = _stitch(farBlock, shift);
       rgba = await _shadowCompute({
         near: near.data, nearW: near.W, nearH: near.W, nearOx: near.ox, nearOy: near.oy,
         far:  far.data,  farW:  far.W,  farH:  far.W,  farOx:  far.ox,  farOy:  far.oy,
@@ -1119,6 +1201,7 @@ async function renderShadowTile(coords, canvas, gen) {
   if (rgba && gen === shadowLayer._gen) {
     canvas.getContext('2d').putImageData(new ImageData(rgba, 256, 256), 0, 0);
   }
+  return incomplete;
 }
 
 const ShadowLayer = L.GridLayer.extend({
@@ -1128,9 +1211,7 @@ const ShadowLayer = L.GridLayer.extend({
     const canvas = document.createElement('canvas');
     canvas.width  = 256;
     canvas.height = 256;
-    renderShadowTile(coords, canvas, this._gen)
-      .catch(err => console.warn('Shadow tile error', coords, err))
-      .finally(() => done(null, canvas));
+    this._shade(coords, canvas, this._gen).finally(() => done(null, canvas));
     return canvas;
   },
 
@@ -1140,8 +1221,23 @@ const ShadowLayer = L.GridLayer.extend({
     for (const key in this._tiles) {
       const t = this._tiles[key];
       startLoading();
-      renderShadowTile(t.coords, t.el, gen).catch(() => {}).finally(stopLoading);
+      this._shade(t.coords, t.el, gen).finally(stopLoading);
     }
+  },
+
+  /**
+   * Render a tile; if a high-res elevation request failed transiently, try
+   * again a little later (up to 3 times) instead of keeping the coarse
+   * stand-in until the next time change.
+   */
+  _shade(coords, canvas, gen, attempt = 0) {
+    return renderShadowTile(coords, canvas, gen).then(incomplete => {
+      if (!incomplete || attempt >= 3) return;
+      setTimeout(() => {
+        const t = this._tiles && this._tiles[this._tileCoordsToKey(coords)];
+        if (gen === this._gen && t && t.el === canvas) this._shade(coords, canvas, gen, attempt + 1);
+      }, 4000 * (attempt + 1));
+    }).catch(err => console.warn('Shadow tile error', coords, err));
   },
 });
 

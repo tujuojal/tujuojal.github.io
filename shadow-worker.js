@@ -247,12 +247,15 @@ function computeShadow(p) {
 
   // Pass 3: colour. Shade = self-shaded or cast shadow; lit slopes nearly
   // edge-on to the sun fade toward shade so the terminator isn't a hard line.
+  // The fade band never reaches flat ground (cosI = sin(alt)), or a low
+  // winter sun would grey out the whole map.
+  const fade = Math.min(TERMINATOR, sz * 0.5);
   for (let i = 0; i < 65536; i++) {
     const c = cosI[i];
     if (c !== c) continue;
     let alpha = 0;
     if (c <= 0 || cast[i] === 1) alpha = SHADE_ALPHA;
-    else if (c < TERMINATOR) alpha = Math.round(SHADE_ALPHA * (1 - c / TERMINATOR));
+    else if (c < fade) alpha = Math.round(SHADE_ALPHA * (1 - c / fade));
     if (alpha) {
       const o = i << 2;
       out[o] = R; out[o + 1] = G; out[o + 2] = B; out[o + 3] = alpha;
